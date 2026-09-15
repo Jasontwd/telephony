@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    if: vars.FLY_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,6 +19,30 @@ jobs:
           node-version: '24'
       - run: npm test
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only --ha=false
+      - name: Deploy without publishing application logs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Fly can include application logs in failure output. Keep that output
+          # only in the temporary runner filesystem, never in public logs/artifacts.
+          trap 'rm -f "$RUNNER_TEMP/fly-deploy.log"' EXIT
+          if timeout 480 flyctl deploy --remote-only --ha=false > "$RUNNER_TEMP/fly-deploy.log" 2>&1; then
+            echo "Fly deployment succeeded."
+          else
+            echo "::error::Fly deployment failed. Inspect private logs in the Fly dashboard."
+            exit 1
+          fi
+      - name: Verify health and protected staff routes
+        run: |
+          python - <<'PY'
+          import urllib.request
+          base = "https://telephony-kidzwq.fly.dev"
+          with urllib.request.urlopen(base + "/health", timeout=30) as response:
+              assert response.status == 200 and response.read() == b"ok", "Health check failed"
+          with urllib.request.urlopen(base + "/", timeout=30) as response:
+              assert response.status == 200, "Contact page failed"
+          with urllib.request.urlopen(base + "/staff", timeout=30) as response:
+              assert response.geturl() == base + "/login", "Staff authentication redirect failed"
+          print("Health, contact page, and staff authentication redirect passed.")
+          PY
