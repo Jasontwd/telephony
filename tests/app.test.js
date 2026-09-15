@@ -1,0 +1,130 @@
+import {test,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {loadConfig,openDatabase,hashPassword,signature,hmac,insertEnquiry,isOpen} from '../core.js';
+import {createApp} from '../server.js';
+import {syncSupport} from '../hubspot.js';
+
+let app,base;
+const account='AC'+'1'.repeat(32),sid='CA'+'2'.repeat(32),child='CA'+'3'.repeat(32);
+const config=loadConfig({SESSION_SECRET:'x'.repeat(40),TWILIO_ACCOUNT_SID:account,TWILIO_AUTH_TOKEN:'test-token',
+  STAFF_USERS_JSON:JSON.stringify(['manager','agent','accounts'].map(role=>({username:role,role,passwordHash:hashPassword('correct-test-password')}))),
+  EMAIL_WEBHOOK_SECRET:'email-test-secret',PUBLIC_PHONE:'+6495550100',HOURS_CONFIRMED:'true',
+  TELEPHONY_ENABLED:'true',SUPPORT_PHONE:'+6495550101',AUCKLAND_PHONE:'+6495550102'});
+before(async()=>{app=createApp(config,openDatabase(':memory:'));await new Promise(r=>app.server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${app.server.address().port}`;config.base=base;});
+after(async()=>{await new Promise(r=>app.server.close(r));app.db.close();});
+const token=html=>html.match(/name="csrf" value="([^"]+)"/)[1];
+async function formPage(path='/') {const r=await fetch(base+path);return {cookie:r.headers.get('set-cookie').split(';')[0],csrf:token(await r.text())};}
+const post=(path,fields,cookie='',extra={})=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Cookie:cookie,...extra},body:new URLSearchParams(fields),redirect:'manual'});
+async function signIn(role) {const f=await formPage('/login');const r=await post('/login',{csrf:f.csrf,username:role,password:'correct-test-password'},f.cookie);assert.equal(r.status,303);const cookie=r.headers.get('set-cookie').split(';')[0];return {cookie,csrf:token(await(await fetch(base+'/staff',{headers:{Cookie:cookie}})).text())};}
+function voice(path,fields={}) {const form=new URLSearchParams({AccountSid:account,CallSid:sid,From:'+6421555010',...fields});return fetch(base+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signature(config.token,config.base+path,form)},body:form});}
+
+test('health check and public page do not expose private destination numbers',async()=>{
+  assert.equal((await fetch(base+'/health')).status,200);
+  const html=await(await fetch(base)).text();assert.ok(!html.includes(config.routes['1'].phone));assert.ok(html.includes('How can we help?'));
+});
+test('staff data requires authentication; unknown user rejected',async()=>{
+  const r=await fetch(base+'/staff',{redirect:'manual'});assert.equal(r.status,303);
+  const f=await formPage('/login');assert.equal((await post('/login',{csrf:f.csrf,username:'unknown',password:'wrong'},f.cookie)).status,401);
+});
+test('public forms require CSRF and valid contact details',async()=>{
+  assert.equal((await post('/enquiries',{name:'Alice'})).status,403);
+  const f=await formPage();assert.equal((await post('/enquiries',{csrf:f.csrf,name:'Alice',queue:'sales',store:'any',subject:'Printer',message:'Help'},f.cookie)).status,400);
+});
+test('valid submission is durable, duplicate form retry is idempotent, HTML is escaped',async()=>{
+  const f=await formPage(),fields={csrf:f.csrf,name:'<script>alert(1)</script>',email:'alice@example.test',queue:'sales',store:'auckland',subject:'Printer quote',message:'Please quote a printer'};
+  const a=await post('/enquiries',fields,f.cookie),b=await post('/enquiries',fields,f.cookie);assert.equal(a.status,201);assert.equal(b.status,201);
+  assert.equal(app.db.prepare("SELECT count(*) AS n FROM enquiries WHERE subject='Printer quote'").get().n,1);
+  const s=await signIn('manager');const html=await(await fetch(base+'/staff',{headers:{Cookie:s.cookie}})).text();assert.ok(!html.includes('<script>'));assert.ok(html.includes('&lt;script&gt;'));
+});
+test('accounts are isolated in lists and direct record access',async()=>{
+  const item=insertEnquiry(app.db,{channel:'web',queue:'accounts',subject:'Private invoice'});
+  const agent=await signIn('agent');const listing=await(await fetch(base+'/staff',{headers:{Cookie:agent.cookie}})).text();assert.ok(!listing.includes('Private invoice'));
+  assert.equal((await fetch(base+'/staff/enquiries/'+item.id,{headers:{Cookie:agent.cookie}})).status,404);
+  const accounts=await signIn('accounts');assert.equal((await fetch(base+'/staff/enquiries/'+item.id,{headers:{Cookie:accounts.cookie}})).status,200);
+});
+test('staff updates validate CSRF, persist ownership, and create audit notes',async()=>{
+  const s=await signIn('manager');const id=app.db.prepare("SELECT id FROM enquiries WHERE subject='Printer quote'").get().id;
+  assert.equal((await post('/staff/enquiries/'+id,{status:'resolved'},s.cookie)).status,403);
+  const fields={csrf:s.csrf,status:'in_progress',owner:'agent',due_at:'2027-01-01',outcome:'quoted',quote_value:'500',callback:'complete',next_action:'Call customer',note:'Discussed requirements'};
+  assert.equal((await post('/staff/enquiries/'+id,fields,s.cookie)).status,303);
+  assert.equal(app.db.prepare('SELECT owner FROM enquiries WHERE id=?').get(id).owner,'agent');
+  assert.equal(app.db.prepare('SELECT count(*) AS n FROM notes WHERE enquiry_id=?').get(id).n,1);
+});
+test('unsigned and tampered voice requests cannot route calls',async()=>{
+  assert.equal((await post('/voice/incoming',{CallSid:sid})).status,403);
+  const f=new URLSearchParams({AccountSid:account,CallSid:sid});const sig=signature(config.token,base+'/voice/incoming',f);f.set('From','+6421000000');
+  assert.equal((await fetch(base+'/voice/incoming',{method:'POST',body:f,headers:{'X-Twilio-Signature':sig}})).status,403);
+});
+test('incoming retry creates one call record and no-selection falls back to voicemail',async()=>{
+  assert.ok((await(await voice('/voice/incoming')).text()).includes('<Gather'));
+  await voice('/voice/incoming');assert.equal(app.db.prepare('SELECT count(*) AS n FROM enquiries WHERE external_key=?').get('call:'+sid).n,1);
+  assert.ok((await(await voice('/voice/select?attempt=0')).text()).includes('<Gather'));
+  assert.ok((await(await voice('/voice/select?attempt=1')).text()).includes('<Record'));
+});
+test('open-hour route dials configured destination with answer confirmation; machine answer falls back',async()=>{
+  const all=Object.fromEntries(Array.from({length:7},(_,i)=>[i,['00:00','23:59']]));config.hours.general=all;
+  const xml=await(await voice('/voice/select?attempt=0',{Digits:'3'})).text();assert.ok(xml.includes(config.routes['3'].phone));assert.ok(xml.includes('/voice/confirm?parent='));
+  const ended=await(await voice('/voice/dial-ended?backup=0',{DialCallStatus:'completed'})).text();assert.ok(ended.includes('<Record'));
+});
+test('confirmed staff answer is tracked; recording and status callbacks remain idempotent',async()=>{
+  const accepted=await voice('/voice/accept?parent='+sid,{CallSid:child,ParentCallSid:sid,Digits:'1'});assert.equal(accepted.status,200);
+  assert.ok(!(await(await voice('/voice/dial-ended?backup=0',{DialCallStatus:'completed'})).text()).includes('<Record'));
+  const recording='RE'+'4'.repeat(32);await voice('/voice/recording',{RecordingSid:recording,RecordingStatus:'completed'});await voice('/voice/status',{CallStatus:'completed'});
+  const item=app.db.prepare('SELECT * FROM enquiries WHERE external_key=?').get('call:'+sid);assert.equal(item.recording_sid,recording);assert.equal(item.call_status,'voicemail');
+});
+test('NZ business hours account for time zone, daylight saving and closed dates',()=>{
+  const c=loadConfig({});assert.equal(isOpen(c,'auckland',new Date('2026-09-14T21:00:00Z')),true);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-09-14T21:00:00Z')),false);
+  assert.equal(isOpen(c,'auckland',new Date('2026-12-07T20:00:00Z')),true);
+  c.closed=['2026-12-08'];assert.equal(isOpen(c,'auckland',new Date('2026-12-07T20:00:00Z')),false);
+});
+test('email bridge rejects invalid signatures and leaves support@ in HubSpot',async()=>{
+  assert.equal((await post('/hooks/email',{})).status,403);
+  const mail={id:'mail-001',to:'support@formtech.co.nz',from:'customer@example.test',subject:'Support',text:'Help'};
+  const sendMail=async m=>{const body=JSON.stringify(m),stamp=String(Math.floor(Date.now()/1000));return fetch(base+'/hooks/email',{method:'POST',headers:{'Content-Type':'application/json','X-Formtech-Timestamp':stamp,'X-Formtech-Signature':hmac(config.emailSecret,stamp+'.'+body)},body});};
+  assert.equal((await sendMail(mail)).status,202);assert.equal(app.db.prepare("SELECT count(*) AS n FROM enquiries WHERE external_key='email:mail-001'").get().n,0);
+  mail.to='orders@formtech.co.nz';await sendMail(mail);await sendMail(mail);assert.equal(app.db.prepare("SELECT count(*) AS n FROM enquiries WHERE external_key='email:mail-001'").get().n,1);
+});
+test('HubSpot handoff checks uniqueness, survives uncertain creation and links the existing ticket',async()=>{
+  const db=openDatabase(':memory:');const item=insertEnquiry(db,{channel:'web',queue:'support',subject:'Repair',phone:'+6421555010'});
+  const c={base,hubspot:{token:'fake',pipeline:'0',stage:'1',referenceProperty:'formtech_reference'}};
+  let created=0,exists=false;
+  const mock=async(url,opts)=>{
+    if(url.includes('/properties/'))return new Response(JSON.stringify({hasUniqueValue:true}));
+    if(opts.method==='POST'){created++;exists=true;throw Error('Simulated response loss after server commit');}
+    return exists?new Response(JSON.stringify({id:'12345'})):new Response('{}',{status:404});
+  };
+  await syncSupport(db,c,mock);assert.ok(db.prepare('SELECT hubspot_error FROM enquiries').get().hubspot_error);
+  db.prepare('UPDATE enquiries SET hubspot_attempt_at=0').run();await syncSupport(db,c,mock);
+  assert.equal(created,1);assert.equal(db.prepare('SELECT hubspot_ticket_id FROM enquiries WHERE id=?').get(item.id).hubspot_ticket_id,'12345');db.close();
+});
+test('HubSpot creates nothing without a verified unique property',async()=>{
+  const db=openDatabase(':memory:');insertEnquiry(db,{channel:'web',queue:'support',subject:'Repair'});
+  let writes=0;await syncSupport(db,{hubspot:{token:'fake',pipeline:'0',stage:'1',referenceProperty:'reference'}},async(url,opts)=>{if(opts.method==='POST')writes++;return new Response(JSON.stringify({hasUniqueValue:false}));});
+  assert.equal(writes,0);assert.ok(db.prepare('SELECT hubspot_error FROM enquiries').get().hubspot_error.includes('setup required'));db.close();
+});
+test('production fails closed without staff authentication and required telephony configuration',()=>{
+  assert.throws(()=>loadConfig({NODE_ENV:'production'}));
+  assert.throws(()=>loadConfig({TELEPHONY_ENABLED:'true'}));
+});
+test('unanswered call tries one backup only, then voicemail; closed route never dials',async()=>{
+  const call='CA'+'5'.repeat(32);config.routes['1'].backup='+6495550103';
+  config.hours.auckland=Object.fromEntries(Array.from({length:7},(_,i)=>[i,['00:00','23:59']]));
+  await voice('/voice/incoming',{CallSid:call});await voice('/voice/select?attempt=0',{CallSid:call,Digits:'1'});
+  const backup=await(await voice('/voice/dial-ended?backup=0',{CallSid:call,DialCallStatus:'busy'})).text();assert.ok(backup.includes(config.routes['1'].backup));
+  const voicemail=await(await voice('/voice/dial-ended?backup=1',{CallSid:call,DialCallStatus:'no-answer'})).text();assert.ok(voicemail.includes('<Record'));assert.ok(!voicemail.includes('<Dial'));
+  config.hours.auckland={};const closed=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:'1'})).text();assert.ok(!closed.includes('<Dial'));
+});
+test('completed provider retries do not reopen a callback finished by staff',async()=>{
+  const call='CA'+'5'.repeat(32);
+  app.db.prepare("UPDATE enquiries SET callback=0 WHERE external_key=?").run('call:'+call);
+  await voice('/voice/status',{CallSid:call,CallStatus:'completed'});
+  assert.equal(app.db.prepare('SELECT callback FROM enquiries WHERE external_key=?').get('call:'+call).callback,0);
+});
+test('database persists enquiries across closing and reopening the connection',()=>{
+  const path=mkdtempSync(tmpdir()+'/formtech-test-')+'/test.sqlite';let db=openDatabase(path);
+  const item=insertEnquiry(db,{channel:'web',queue:'sales',subject:'Persistence check'});db.close();db=openDatabase(path);
+  assert.equal(db.prepare('SELECT subject FROM enquiries WHERE reference=?').get(item.reference).subject,'Persistence check');db.close();
+});

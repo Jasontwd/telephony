@@ -1,0 +1,7 @@
+.git
+.env
+data
+backups
+staff-users.json
+*.sqlite*
+tests

@@ -1,0 +1,10 @@
+import {DatabaseSync} from 'node:sqlite';
+import {resolve,dirname} from 'node:path';
+import {mkdirSync,existsSync} from 'node:fs';
+const source=process.env.DB_PATH||'./data/formtech.sqlite';
+const output=resolve(process.argv[2]||`./backups/formtech-${Date.now()}.sqlite`);
+if(!existsSync(source))throw Error('Source database does not exist');
+if(existsSync(output))throw Error('Backup destination already exists');
+mkdirSync(dirname(output),{recursive:true});
+const db=new DatabaseSync(source);db.prepare('VACUUM INTO ?').run(output);db.close();
+console.log('Consistent database backup created. Copy it to secure off-machine storage.');
