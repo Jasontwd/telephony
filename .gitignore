@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/
+*.sqlite*
+staff-users.json
+backups/
