@@ -1,0 +1,59 @@
+name: Prepare Fly recovery
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/fly-recovery.yml]
+permissions:
+  contents: read
+concurrency:
+  group: fly-production
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: telephony-kidzwq
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Inspect current infrastructure
+        run: |
+          set -euo pipefail
+          flyctl version
+          flyctl machines list -a "$FLY_APP" --json > machines.json
+          flyctl volumes list -a "$FLY_APP" --json > volumes.json
+          flyctl ips list -a "$FLY_APP" --json > ips.json
+          cat machines.json volumes.json ips.json
+      - name: Preserve original volume and fork onto another host
+        run: |
+          set -euo pipefail
+          # This recovery is only for the initial deployment with no app Machines.
+          jq -e 'type == "array" and length == 0' machines.json >/dev/null
+          jq -e 'any(.[]; (.id // .ID) == "vol_r68wy28zo3kdp9j4" and (.name // .Name) == "formtech_data" and (.region // .Region) == "syd" and ((.attached_machine_id // .AttachedMachineID // "") == ""))' volumes.json >/dev/null
+          if jq -e 'any(.[]; (.name // .Name) == "formtech_data_v2")' volumes.json >/dev/null; then
+            echo "Recovery volume already exists; no additional volume created."
+          else
+            flyctl volumes fork vol_r68wy28zo3kdp9j4 -a "$FLY_APP" --name formtech_data_v2 --region syd --require-unique-zone --unique-zone-app-wide --vm-size shared-cpu-1x --vm-memory 512
+          fi
+          flyctl volumes list -a "$FLY_APP"
+      - name: Allocate shared public IPv4 if needed
+        run: |
+          set -euo pipefail
+          if jq -e 'any(.[]; ((.Type // .type // "") | ascii_downcase) == "shared_v4" or ((.Type // .type // "") | ascii_downcase) == "v4")' ips.json >/dev/null; then
+            echo "Public IPv4 already exists."
+          else
+            flyctl ips allocate-v4 --shared -a "$FLY_APP"
+          fi
+          flyctl ips list -a "$FLY_APP"
+      - name: Check required secret names without reading values
+        run: |
+          set -euo pipefail
+          flyctl secrets list -a "$FLY_APP" --json > secret-names.json
+          if jq -e 'any(.[]; (.Name // .name) == "STAFF_USERS_JSON")' secret-names.json >/dev/null; then
+            echo "Staff login configuration is present."
+          else
+            echo "::notice::STAFF_USERS_JSON must be configured before deploying the application."
+          fi
+          echo "Original volume retained. Deployment is a separate step after staff setup."
