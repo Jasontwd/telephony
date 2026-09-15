@@ -1,11 +1,12 @@
-# Replace this name if it is unavailable when creating the Fly app.
-app = "formtech-telephony"
+# Existing Fly app supplied by Formtech.
+app = "telephony-kidzwq"
 primary_region = "syd"
 
 [build]
   dockerfile = "Dockerfile"
 
 [env]
+  PUBLIC_BASE_URL = "https://telephony-kidzwq.fly.dev"
   NODE_ENV = "production"
   PORT = "8080"
   DB_PATH = "/data/formtech.sqlite"

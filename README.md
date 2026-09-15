@@ -48,15 +48,15 @@ The output contains a salted scrypt hash, not a plaintext password. Combine the 
 
 ## Deploy to Fly.io
 
-This account's Fly app and credentials have not been provisioned by this project. Perform these steps in a terminal authenticated to the intended Fly organisation. Install [flyctl](https://fly.io/docs/flyctl/install/) first.
+Formtech has created the Fly app `telephony-kidzwq`. This project has not verified its Machine, volume or runtime secrets. Perform these steps in a terminal authenticated to the intended Fly organisation. Install [flyctl](https://fly.io/docs/flyctl/install/) first.
 
 1. Clone the repo and check out the implementation branch (or main after merging).
-2. Run `fly auth login`. Create the app with `fly apps create formtech-telephony`. If the name is unavailable, choose one and update `app` in `fly.toml`.
-3. Create the database volume: `fly volumes create formtech_data --region syd --size 1 -a formtech-telephony`.
-4. Set secrets using `fly secrets import -a formtech-telephony < /secure/path/formtech-secrets.env`. Keep that file outside Git, restrict its permissions, and delete it securely when no longer needed. The app requires PUBLIC_BASE_URL (your actual HTTPS Fly hostname), SESSION_SECRET and STAFF_USERS_JSON. Use the `.env.example` keys as a checklist. Leave TELEPHONY_ENABLED=false until the provider is ready.
+2. Run `fly auth login`, then `fly status -a telephony-kidzwq` to verify access to the existing app. Do not create another app.
+3. Check `fly volumes list -a telephony-kidzwq` for an existing `formtech_data` volume in Sydney first. If absent, create it: `fly volumes create formtech_data --region syd --size 1 -a telephony-kidzwq`.
+4. Set secrets using `fly secrets import -a telephony-kidzwq < /secure/path/formtech-secrets.env`. Keep that file outside Git, restrict its permissions, and delete it securely when no longer needed. The app requires PUBLIC_BASE_URL (already set to https://telephony-kidzwq.fly.dev in fly.toml), SESSION_SECRET and STAFF_USERS_JSON. Use the `.env.example` keys as a checklist. Leave TELEPHONY_ENABLED=false until the provider is ready.
 5. Deploy with `fly deploy --ha=false`. Verify exactly one Machine with `fly status`, and that its volume is mounted at `/data`. The container starts as root to permit writing the provisioned volume; do not mount other sensitive volumes.
 6. Verify `/health`, a staff login and a test form submission. Restart the Machine and confirm the enquiry persists.
-7. Create an app-scoped deploy token: `fly tokens create deploy -a formtech-telephony`. Store its output as the GitHub Actions repository secret `FLY_API_TOKEN`—never in a commit, issue or chat.
+7. Create an app-scoped deploy token: `fly tokens create deploy -a telephony-kidzwq`. Store its output as the GitHub Actions repository secret `FLY_API_TOKEN`—never in a commit, issue or chat.
 8. Set GitHub Actions repository variable `FLY_DEPLOY_ENABLED` to `true` only once the app, volume and secrets exist. The deployment workflow tests before deploying main. It can also be run manually. Until this variable is set, deployments are skipped.
 
 The supplied Fly config selects Sydney and keeps a Machine running to avoid phone webhook cold starts. Resources and calls incur provider charges. No resources have been created by the supplied CI until deployment is enabled.
@@ -91,8 +91,8 @@ Configure the purchased number:
 
 | Setting | URL / method |
 | --- | --- |
-| A call comes in | `https://YOUR-APP.fly.dev/voice/incoming` — POST |
-| Call status changes | `https://YOUR-APP.fly.dev/voice/status` — POST |
+| A call comes in | `https://telephony-kidzwq.fly.dev/voice/incoming` — POST |
+| Call status changes | `https://telephony-kidzwq.fly.dev/voice/status` — POST |
 
 Other action, confirmation and recording callbacks are generated in the voice responses. PUBLIC_BASE_URL must exactly match the public webhook origin for signature validation. Do not put an extra URL rewrite in front of these endpoints. All webhook fields are included in HMAC validation; unsigned requests are rejected. A configured destination cannot be overridden by caller input.
 
@@ -139,3 +139,7 @@ Sign the exact UTF-8 body using HMAC-SHA256 with EMAIL_WEBHOOK_SECRET: `timestam
 Complete real-provider acceptance tests for all five selections, opening/closing boundaries, public holidays, rejected mobile answers, no answer, busy, voicemail, retry delivery, a backup, caller hang-up before selection, and app outage fallback. Confirm the correct HubSpot ticket and callback owner are produced. Verify backups and monitoring. Local automated tests use signed simulated requests; they do not prove live provider connectivity.
 
 Only then replace personal contact numbers in the Formtech website header, showroom/contact blocks and public listings. Keep the existing number active during transition. This project has not changed formtech.co.nz.
+
+### Credential types
+
+This service requires the Twilio Account SID (AC followed by 32 hexadecimal characters) and that account's Auth Token. An OAuth client ID is not a substitute. Store credentials in Fly runtime secrets; do not put them in GitHub source or chat. The GitHub Actions secret FLY_API_TOKEN is a separate, app-scoped Fly deployment token.
