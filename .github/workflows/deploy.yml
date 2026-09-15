@@ -36,7 +36,7 @@ jobs:
       - name: Verify health and protected staff routes
         run: |
           python - <<'PY'
-          import urllib.request
+          import urllib.request, urllib.error, urllib.parse, http.cookiejar, re
           base = "https://telephony-kidzwq.fly.dev"
           with urllib.request.urlopen(base + "/health", timeout=30) as response:
               assert response.status == 200 and response.read() == b"ok", "Health check failed"
@@ -44,5 +44,18 @@ jobs:
               assert response.status == 200, "Contact page failed"
           with urllib.request.urlopen(base + "/staff", timeout=30) as response:
               assert response.geturl() == base + "/login", "Staff authentication redirect failed"
-          print("Health, contact page, and staff authentication redirect passed.")
+          client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+          with client.open(base + "/login", timeout=30) as response:
+              assert response.headers.get("Referrer-Policy") == "same-origin", "Browser form policy regression"
+              csrf = re.search(r'name="csrf" value="([^"]+)"', response.read().decode()).group(1)
+          # Empty credentials exercise the form checks without accessing an account.
+          request = urllib.request.Request(base + "/login",
+              data=urllib.parse.urlencode({"csrf": csrf, "username": "", "password": ""}).encode(),
+              headers={"Origin": base, "Content-Type": "application/x-www-form-urlencoded"})
+          try:
+              client.open(request, timeout=30)
+              raise AssertionError("Empty credentials must not authenticate")
+          except urllib.error.HTTPError as error:
+              assert error.code == 401, "Login form failed before credential validation"
+          print("Health, contact page, staff protection, and login form origin checks passed.")
           PY

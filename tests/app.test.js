@@ -32,6 +32,22 @@ test('public forms require CSRF and valid contact details',async()=>{
   assert.equal((await post('/enquiries',{name:'Alice'})).status,403);
   const f=await formPage();assert.equal((await post('/enquiries',{csrf:f.csrf,name:'Alice',queue:'sales',store:'any',subject:'Printer',message:'Help'},f.cookie)).status,400);
 });
+test('browser form policy preserves same-origin login and rejects foreign origins',async()=>{
+  const page=await fetch(base+'/login');
+  assert.equal(page.headers.get('referrer-policy'),'same-origin');
+  const cookie=page.headers.get('set-cookie').split(';')[0];
+  const fields={csrf:token(await page.text()),username:'manager',password:'correct-test-password'};
+  for(const origin of ['null','https://untrusted.example']) {
+    const rejected=await post('/login',fields,cookie,{Origin:origin});
+    assert.equal(rejected.status,403);
+    assert.match(await rejected.text(),/Invalid request origin/);
+  }
+  assert.equal((await post('/login',{...fields,csrf:'invalid'},cookie,{Origin:base})).status,403);
+  const accepted=await post('/login',fields,cookie,{Origin:base});
+  assert.equal(accepted.status,303);
+  const session=accepted.headers.get('set-cookie').split(';')[0];
+  assert.equal((await fetch(base+'/staff',{headers:{Cookie:session},redirect:'manual'})).status,200);
+});
 test('valid submission is durable, duplicate form retry is idempotent, HTML is escaped',async()=>{
   const f=await formPage(),fields={csrf:f.csrf,name:'<script>alert(1)</script>',email:'alice@example.test',queue:'sales',store:'auckland',subject:'Printer quote',message:'Please quote a printer'};
   const a=await post('/enquiries',fields,f.cookie),b=await post('/enquiries',fields,f.cookie);assert.equal(a.status,201);assert.equal(b.status,201);

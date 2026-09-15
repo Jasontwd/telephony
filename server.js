@@ -39,7 +39,10 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
   };
   async function handler(req,res) {
     res.setHeader('X-Content-Type-Options','nosniff');
-    res.setHeader('Referrer-Policy','no-referrer');
+    // no-referrer makes browsers send Origin: null on form POSTs, which our
+    // origin check correctly rejects. Preserve same-origin form provenance
+    // while still withholding referrers from external websites.
+    res.setHeader('Referrer-Policy','same-origin');
     res.setHeader('Content-Security-Policy',"default-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
     res.setHeader('Cache-Control','no-store');
     if(config.production) res.setHeader('Strict-Transport-Security','max-age=31536000');
