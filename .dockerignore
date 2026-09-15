@@ -5,3 +5,4 @@ backups
 staff-users.json
 *.sqlite*
 tests
+tools

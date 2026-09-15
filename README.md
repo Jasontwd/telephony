@@ -46,13 +46,17 @@ unset staff_password
 
 The output contains a salted scrypt hash, not a plaintext password. Combine the objects into a JSON array and set `STAFF_USERS_JSON` as a secret. Do not commit the JSON or hashes. Use a password manager for staff passwords. Removing a user from configuration invalidates their existing sessions on restart. Sessions expire after eight hours. For immediate password-change session revocation, rotate SESSION_SECRET too.
 
+### First manager setup without a terminal
+
+Download `tools/create-staff-login.html` and open it locally in your browser. It works offline with bundled scrypt-js 3.0.1 and makes no network requests. Choose and confirm a password for `jason` (manager), then copy the generated JSON into the Fly secret `STAFF_USERS_JSON`. Save the password in your password manager. This helper is for initial setup: replacing the secret replaces the complete staff list. The helper uses the same UTF-8 encoding, salt representation and scrypt parameters as the server. No plaintext password is included in the JSON.
+
 ## Deploy to Fly.io
 
 Formtech has created the Fly app `telephony-kidzwq`. This project has not verified its Machine, volume or runtime secrets. Perform these steps in a terminal authenticated to the intended Fly organisation. Install [flyctl](https://fly.io/docs/flyctl/install/) first.
 
 1. Clone the repo and check out the implementation branch (or main after merging).
 2. Run `fly auth login`, then `fly status -a telephony-kidzwq` to verify access to the existing app. Do not create another app.
-3. Check `fly volumes list -a telephony-kidzwq` for an existing `formtech_data` volume in Sydney first. If absent, create it: `fly volumes create formtech_data --region syd --size 1 -a telephony-kidzwq`.
+3. Check `fly volumes list -a telephony-kidzwq` for an existing `formtech_data_v2` volume in Sydney first. If absent, create it: `fly volumes create formtech_data_v2 --region syd --size 1 -a telephony-kidzwq`.
 4. Set secrets using `fly secrets import -a telephony-kidzwq < /secure/path/formtech-secrets.env`. Keep that file outside Git, restrict its permissions, and delete it securely when no longer needed. The app requires PUBLIC_BASE_URL (already set to https://telephony-kidzwq.fly.dev in fly.toml), SESSION_SECRET and STAFF_USERS_JSON. Use the `.env.example` keys as a checklist. Leave TELEPHONY_ENABLED=false until the provider is ready.
 5. Deploy with `fly deploy --ha=false`. Verify exactly one Machine with `fly status`, and that its volume is mounted at `/data`. The container starts as root to permit writing the provisioned volume; do not mount other sensitive volumes.
 6. Verify `/health`, a staff login and a test form submission. Restart the Machine and confirm the enquiry persists.
@@ -60,6 +64,12 @@ Formtech has created the Fly app `telephony-kidzwq`. This project has not verifi
 8. Set GitHub Actions repository variable `FLY_DEPLOY_ENABLED` to `true` only once the app, volume and secrets exist. The deployment workflow tests before deploying main. It can also be run manually. Until this variable is set, deployments are skipped.
 
 The supplied Fly config selects Sydney and keeps a Machine running to avoid phone webhook cold starts. Resources and calls incur provider charges. No resources have been created by the supplied CI until deployment is enabled.
+
+### Initial deployment recovery (15 September 2026)
+
+The original Sydney volume `vol_r68wy28zo3kdp9j4` could not accommodate a Machine on its host. The recovery workflow preserved it and forked it to `formtech_data_v2` (`vol_vxmgzk8j2gon2xw4`) in another Sydney hardware zone. The Fly config now targets that fork. A shared public IPv4 was allocated explicitly after automatic IPv6 allocation failed. No original volume was deleted.
+
+`.github/workflows/fly-recovery.yml` is now manual-only and refuses to run recovery when app Machines exist. It is a record of this initial recovery, not a general database migration tool. `STAFF_USERS_JSON` was still missing when recovery completed; configure it before deployment.
 
 ### Backups and recovery
 

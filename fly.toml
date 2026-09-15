@@ -12,7 +12,7 @@ primary_region = "syd"
   DB_PATH = "/data/formtech.sqlite"
 
 [[mounts]]
-  source = "formtech_data"
+  source = "formtech_data_v2"
   destination = "/data"
 
 [http_service]
