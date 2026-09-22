@@ -92,7 +92,7 @@ export function loadConfig(env = process.env) {
   if (production && !users.some(u=>u.role==='manager')) throw Error('Configure at least one manager');
   const defaults = {
     auckland: {1:['09:00','17:00'],2:['09:00','17:00'],3:['09:00','17:00'],4:['09:00','17:00'],5:['09:00','17:00'],6:['11:00','15:00']},
-    christchurch: {1:['11:00','16:00'],2:['11:00','16:00'],3:['11:00','16:00'],4:['11:00','16:00'],5:['11:00','16:00']},
+    christchurch: {1:['10:00','17:00'],2:['10:00','17:00'],3:['10:00','17:00'],4:['10:00','17:00'],5:['10:00','17:00']},
     general: {1:['09:00','17:00'],2:['09:00','17:00'],3:['09:00','17:00'],4:['09:00','17:00'],5:['09:00','17:00']}
   };
   const hours = env.HOURS_JSON ? JSON.parse(env.HOURS_JSON) : defaults;

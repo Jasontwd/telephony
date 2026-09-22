@@ -94,6 +94,12 @@ test('NZ business hours account for time zone, daylight saving and closed dates'
   const c=loadConfig({});assert.equal(isOpen(c,'auckland',new Date('2026-09-14T21:00:00Z')),true);
   assert.equal(isOpen(c,'christchurch',new Date('2026-09-14T21:00:00Z')),false);
   assert.equal(isOpen(c,'auckland',new Date('2026-12-07T20:00:00Z')),true);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-09-14T21:59:00Z')),false);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-09-14T22:00:00Z')),true);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-09-15T04:59:00Z')),true);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-09-15T05:00:00Z')),false);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-09-18T23:00:00Z')),false);
+  assert.equal(isOpen(c,'christchurch',new Date('2026-12-07T21:00:00Z')),true);
   c.closed=['2026-12-08'];assert.equal(isOpen(c,'auckland',new Date('2026-12-07T20:00:00Z')),false);
 });
 test('email bridge rejects invalid signatures and leaves support@ in HubSpot',async()=>{

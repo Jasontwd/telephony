@@ -112,12 +112,12 @@ Enable protected recording media in Twilio. The voicemail greeting discloses rec
 
 ### Business hours
 
-Defaults are based on the published store hours and must be confirmed: Auckland weekdays 09:00–17:00 and Saturday 11:00–15:00; Christchurch weekdays 11:00–16:00. Department queues default to weekdays 09:00–17:00. All use Pacific/Auckland, including daylight saving. CLOSED_DATES overrides every route. Public holidays are **not** calculated automatically.
+Defaults are based on the published store hours and must be confirmed: Auckland weekdays 09:00–17:00 and Saturday 11:00–15:00; Christchurch weekdays 10:00–17:00. Department queues default to weekdays 09:00–17:00. All use Pacific/Auckland, including daylight saving. CLOSED_DATES overrides every route. Public holidays are **not** calculated automatically.
 
 HOURS_JSON can replace all hours, with keys `auckland`, `christchurch`, `general`, weekday keys 0–6 (Sunday=0), and `["HH:MM","HH:MM"]` ranges. Missing weekdays are closed. For example:
 
 ```json
-{"auckland":{"1":["09:00","17:00"]},"christchurch":{"1":["11:00","16:00"]},"general":{"1":["09:00","17:00"]}}
+{"auckland":{"1":["09:00","17:00"]},"christchurch":{"1":["10:00","17:00"]},"general":{"1":["09:00","17:00"]}}
 ```
 
 That example opens Mondays only; do not use it as the full week schedule.

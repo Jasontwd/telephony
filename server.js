@@ -38,7 +38,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
     const dest=backup?route.backup:route.phone;
     if(!isOpen(config,route.store)) {
       const location={auckland:'Auckland',christchurch:'Christchurch'}[route.store];
-      const closed=location?say(`Our ${location} 3D showroom and production bureau is currently closed. We will get back to you during business hours.`):'';
+      const closed=location?say(`Our ${location} 3D showroom and production bureau is currently closed.`):'';
       return closed+voicemail(item);
     }
     if(!dest) return voicemail(item);
