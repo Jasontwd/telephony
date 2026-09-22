@@ -217,3 +217,9 @@ test('daily call preview is manager-only and does not send mail',async()=>{
     if(role==='manager')assert.match(await response.text(),/Viewing this page does not send an email/);
   }
 });
+
+test('manual email trigger requires manager and CSRF and refuses an unconfigured sender',async()=>{
+  const agent=await signIn('agent');assert.equal((await post('/staff/call-summary/test',{csrf:agent.csrf},agent.cookie)).status,404);
+  const manager=await signIn('manager');assert.equal((await post('/staff/call-summary/test',{},manager.cookie)).status,403);
+  assert.equal((await post('/staff/call-summary/test',{csrf:manager.csrf},manager.cookie)).status,400);
+});

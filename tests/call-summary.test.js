@@ -48,3 +48,18 @@ test('concurrent ticks lease the report so only one request is in flight',async(
   const first=runCallSummary(db,config,sender,at('2026-09-21T20:00:00Z'));
   await runCallSummary(db,config,sender,at('2026-09-21T20:00:00Z'));assert.equal(sends,1);release();await first;db.close();
 });
+
+test('manual test uses frozen payload, sends once, and preserves the scheduled morning',async()=>{
+  const {queueTestSummary}=await import('../call-summary.js');
+  const db=openDatabase(':memory:');await activate(db);
+  const now=at('2026-09-21T19:30:00Z');
+  assert.equal(queueTestSummary(db,{...config,summary:{...config.summary,from:''}},now).status,'not_configured');
+  assert.equal(queueTestSummary(db,config,now).status,'pending');
+  queueTestSummary(db,config,at('2026-09-21T19:40:00Z'));
+  const row=db.prepare('SELECT * FROM call_summary_jobs').get();assert.match(JSON.parse(row.payload).subject,/^\[TEST\]/);
+  let sent=0;const sender=async()=>{sent++;return {ok:true,json:async()=>({id:'test-id'})};};
+  await runCallSummary(db,config,sender,now);
+  assert.equal(queueTestSummary(db,config,now).status,'accepted');
+  await runCallSummary(db,config,sender,now);assert.equal(sent,1);
+  await runCallSummary(db,config,sender,at('2026-09-21T20:00:00Z'));assert.equal(sent,2);db.close();
+});

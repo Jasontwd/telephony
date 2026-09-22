@@ -77,7 +77,7 @@ export function summaryStatus(db,config) {
   initSummaryDb(db);
   return {ready:summaryReady(config),enabled:!!config.summary?.enabled,
     activated:db.prepare('SELECT enabled_at FROM call_summary_settings WHERE id=1').get()?.enabled_at||'',
-    last:db.prepare('SELECT day,status,attempts,accepted_at,error FROM call_summary_jobs ORDER BY day DESC LIMIT 1').get()};
+    last:db.prepare('SELECT day,status,attempts,accepted_at,error FROM call_summary_jobs ORDER BY created_at DESC LIMIT 1').get()};
 }
 export async function runCallSummary(db,config,fetcher=fetch,now=new Date()) {
   if(!summaryReady(config))return {status:'not_configured'};
@@ -116,4 +116,19 @@ export async function runCallSummary(db,config,fetcher=fetch,now=new Date()) {
     db.prepare('UPDATE call_summary_jobs SET lease_until=0,next_attempt_at=?,error=? WHERE day=?').run(nowMs+delay,message,job.day);
     return {status:'retry_pending',day:job.day};
   }
+}
+
+// One manual test per NZ date; repeated clicks reuse the frozen job.
+export function queueTestSummary(db,config,now=new Date()) {
+  if(!summaryReady(config))return {status:'not_configured'};
+  initSummaryDb(db);
+  const key='test:'+dateKey(now),cfg=config.summary;
+  const existing=db.prepare('SELECT status FROM call_summary_jobs WHERE day=?').get(key);
+  if(existing)return {status:existing.status};
+  const report=callReport(db,config,new Date(now.getTime()-dayMs),now);
+  const account=createHash('sha256').update(config.base+'|'+cfg.to).digest('hex').slice(0,20);
+  const payload=JSON.stringify({from:`Formtech <${cfg.from}>`,to:[cfg.to],subject:'[TEST] '+report.subject,text:report.text,html:report.html});
+  db.prepare('INSERT OR IGNORE INTO call_summary_jobs(day,created_at,payload,idempotency_key) VALUES(?,?,?,?)')
+    .run(key,now.toISOString(),payload,`formtech-calls/${account}/${key}`);
+  return {status:'pending'};
 }

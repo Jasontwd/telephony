@@ -1,4 +1,4 @@
-import {runCallSummary,callReport,summaryStatus} from './call-summary.js';
+import {runCallSummary,callReport,summaryStatus,queueTestSummary} from './call-summary.js';
 import http from 'node:http';
 import {readFileSync} from 'node:fs';
 import {randomBytes} from 'node:crypto';
@@ -161,14 +161,22 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
         const item=insertEnquiry(db,{external_key:'email:'+mail.id,channel:'email',email:mail.from,queue:mailboxes[mail.to.toLowerCase()],subject:mail.subject,message:mail.text});
         return send(200,JSON.stringify({reference:item.reference}),'application/json');
       }
+      if(req.method==='POST'&&path==='/staff/call-summary/test') {
+        if(!user)return redirect('/login');
+        if(user.role!=='manager')fail(404,'Page not found');
+        checkCsrf();
+        const result=queueTestSummary(db,config);
+        if(result.status==='not_configured')fail(400,'Email sender is not configured');
+        return redirect('/staff/call-summary');
+      }
       if(req.method==='GET'&&path==='/staff/call-summary') {
         if(!user)return redirect('/login');
         if(user.role!=='manager')fail(404,'Page not found');
         const current=new Date(),report=callReport(db,config,new Date(current.getTime()-86400000),current);
         const state=summaryStatus(db,config),cfg=config.summary;
         const mode=state.ready?'Ready - runs daily at '+cfg.hour+':00 New Zealand time':state.enabled?'Waiting for email sender configuration':'Disabled';
-        const last=state.last?`<p>Last scheduled report: ${esc(state.last.day)} - ${esc(state.last.status)}. ${esc(state.last.error)}</p>`:'';
-        return send(200,views.page('Call summary',`<div class="notice"><b>${esc(mode)}</b><p>Recipient: ${esc(cfg.to)}. First email runs on the next scheduled morning after activation. Accepted means the email provider accepted it, not confirmed inbox delivery.</p>${last}</div><p class="muted">Live preview of the previous 24 hours. Viewing this page does not send an email.</p>${report.body}`,user,session.csrf));
+        const last=state.last?`<p>Last report: ${esc(state.last.day)} - ${esc(state.last.status)}. ${esc(state.last.error)}</p>`:'';
+        return send(200,views.page('Call summary',`<div class="notice"><b>${esc(mode)}</b><p>Recipient: ${esc(cfg.to)}. First email runs on the next scheduled morning after activation. Accepted means the email provider accepted it, not confirmed inbox delivery.</p>${last}</div>${state.ready?`<form method="post" action="/staff/call-summary/test"><input type="hidden" name="csrf" value="${esc(session.csrf)}"><button type="submit">Send test summary</button><p class="muted">Sends to ${esc(cfg.to)} within a minute. Limited to one test per New Zealand date; repeated clicks do not send duplicates. Look for [TEST] in the subject.</p></form>`:''}<p class="muted">Live preview of the previous 24 hours. Viewing this page does not send an email.</p>${report.body}`,user,session.csrf));
       }
       if(req.method==='GET'&&path==='/') return send(200,views.contact(config,user?session.csrf:publicCsrf()));
       if(req.method==='GET'&&path==='/embed') return send(200,views.contact(config,embedToken(),'',true));
