@@ -202,3 +202,18 @@ exists, preserve the other entries rather than replacing the whole list.
 Martin signs in at `/login`; accounts enquiries remain inaccessible. Auckland
 enquiries can now be assigned automatically to his `martin` username.
 Removing an account requires removing it from its corresponding secret and deploying.
+
+## Daily call email
+
+The Fly app checks once per minute for a report due at **08:00 Pacific/Auckland**, addressed to **jason@formtech.co.nz**. The report covers phone enquiries logged in the exact preceding 24 hours, with totals, departments, answered/unanswered calls, voicemails and pending callbacks for those calls. It links to protected staff records and sends a zero-call report on quiet days. Email details are limited to the first 100 calls; totals include all calls. Outcomes reflect the database when the report is prepared, not conversation transcripts.
+
+To activate delivery:
+1. Verify a sending domain in [Resend](https://resend.com/docs/dashboard/domains/introduction), including its required DNS records.
+2. Create a sending API key and save it privately in Fly Secrets as `RESEND_API_KEY`.
+3. Set `CALL_SUMMARY_FROM` in Fly Secrets to an address on that verified domain, for example `calls@formtech.co.nz`. Do not use this example until domain verification succeeds.
+4. Deploy the secrets. `CALL_SUMMARY_ENABLED=true`, `CALL_SUMMARY_TO=jason@formtech.co.nz` and `CALL_SUMMARY_HOUR=8` are already in fly.toml. A Fly secret with the same name overrides its configured value.
+5. Sign in as a manager and open `/staff/call-summary` to check readiness and preview the previous 24 hours. The first scheduled email runs at the next 8am after activation. No email is sent by viewing the preview.
+
+A persistent SQLite job prevents repeat sends after a restart. A frozen payload and Resend idempotency key protect retries after uncertain network results. Retries stop after 23 hours and mark the job `needs_review`; check Resend before any manual resend. `accepted` means accepted by Resend, not confirmed inbox delivery; inspect delivery/bounce events in Resend. Keep the Fly machine running (the existing configuration does). A restart catches up the current day's due report; whole missed days are not backfilled. Because the window is exactly 24 hours, the two NZ daylight-saving change days can overlap or omit one hour relative to the preceding daily report. Disable with `CALL_SUMMARY_ENABLED=false`.
+
+Sender credentials are required: deployment alone does not activate outgoing email. Email carries caller numbers to the configured recipient; no recordings or message contents are included. Only managers can view the report because it includes all departments, including accounts.

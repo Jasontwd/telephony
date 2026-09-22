@@ -1,3 +1,4 @@
+import {loadSummaryConfig} from './call-summary.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -114,7 +115,7 @@ export function loadConfig(env = process.env) {
   if (env.PUBLIC_PHONE && !/^\+[1-9]\d{7,14}$/.test(env.PUBLIC_PHONE)) throw Error('PUBLIC_PHONE must use E.164 format');
   const enabled = env.TELEPHONY_ENABLED === 'true';
   if (enabled && (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.PUBLIC_PHONE || env.HOURS_CONFIRMED !== 'true')) throw Error('Confirm phone credentials, public number and hours before enabling calls');
-  return {production,secret,base,users,hours,routes,enabled,publicPhone:env.PUBLIC_PHONE||'',
+  return {summary:loadSummaryConfig(env),production,secret,base,users,hours,routes,enabled,publicPhone:env.PUBLIC_PHONE||'',
     token:env.TWILIO_AUTH_TOKEN||'',account:env.TWILIO_ACCOUNT_SID||'',
     hubspot: {token:env.HUBSPOT_ACCESS_TOKEN||'',pipeline:env.HUBSPOT_TICKET_PIPELINE||'',
       stage:env.HUBSPOT_TICKET_STAGE||'',referenceProperty:env.HUBSPOT_REFERENCE_PROPERTY||'formtech_reference',

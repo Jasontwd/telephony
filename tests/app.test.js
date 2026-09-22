@@ -207,3 +207,13 @@ test('closed showroom choices announce the selected location before voicemail, w
     } finally {config.hours[store]=originalHours;config.routes[digit].phone=originalPhone;}
   }
 });
+
+test('daily call preview is manager-only and does not send mail',async()=>{
+  assert.equal((await fetch(base+'/staff/call-summary',{redirect:'manual'})).status,303);
+  for(const role of ['agent','accounts','manager']) {
+    const session=await signIn(role);
+    const response=await fetch(base+'/staff/call-summary',{headers:{Cookie:session.cookie}});
+    assert.equal(response.status,role==='manager'?200:404);
+    if(role==='manager')assert.match(await response.text(),/Viewing this page does not send an email/);
+  }
+});
