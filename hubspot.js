@@ -4,7 +4,7 @@ export async function syncSupport(db,config,fetcher=fetch) {
   const hs=config.hubspot;
   if(!hs?.token||!hs.pipeline||!hs.stage)return;
   const now=Math.floor(Date.now()/1000);
-  const items=db.prepare(`SELECT * FROM enquiries WHERE queue='support' AND channel IN ('web','phone')
+  const items=db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND queue='support' AND channel IN ('web','phone')
     AND hubspot_ticket_id='' AND hubspot_attempt_at<? ORDER BY id LIMIT 10`).all(now-60);
   const request=async(path,options={})=>fetcher('https://api.hubapi.com'+path,{
     ...options,signal:AbortSignal.timeout(10000),headers:{Authorization:`Bearer ${hs.token}`,'Content-Type':'application/json'}});

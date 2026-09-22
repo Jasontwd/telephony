@@ -223,3 +223,36 @@ test('manual email trigger requires manager and CSRF and refuses an unconfigured
   const manager=await signIn('manager');assert.equal((await post('/staff/call-summary/test',{},manager.cookie)).status,403);
   assert.equal((await post('/staff/call-summary/test',{csrf:manager.csrf},manager.cookie)).status,400);
 });
+
+test('manager deletion is reversible, audited, CSRF protected and excluded from summaries',async()=>{
+  const {callReport}=await import('../call-summary.js');
+  const item=insertEnquiry(app.db,{channel:'phone',queue:'general',subject:'Disposable test call',external_key:'call:deletion-test',callback:1});
+  const manager=await signIn('manager'),agent=await signIn('agent');
+  const path='/staff/enquiries/'+item.id;
+  assert.equal((await post(path+'/delete',{reason:'test',csrf:agent.csrf},agent.cookie)).status,404);
+  assert.equal((await post(path+'/delete',{reason:'test'},manager.cookie)).status,403);
+  assert.equal((await post(path+'/delete',{reason:'wrong',csrf:manager.csrf},manager.cookie)).status,400);
+  assert.equal((await post(path+'/delete',{reason:'test',csrf:manager.csrf},manager.cookie)).status,303);
+  const html=await(await fetch(base+'/staff',{headers:{Cookie:manager.cookie}})).text();assert(!html.includes('Disposable test call'));
+  assert.equal((await fetch(base+path,{headers:{Cookie:agent.cookie}})).status,404);
+  assert.equal((await fetch(base+'/staff/deleted',{headers:{Cookie:agent.cookie}})).status,404);
+  const deleted=await(await fetch(base+'/staff/deleted',{headers:{Cookie:manager.cookie}})).text();assert(deleted.includes('Disposable test call'));
+  const detail=await(await fetch(base+path,{headers:{Cookie:manager.cookie}})).text();assert(detail.includes('Restore enquiry'));assert(!detail.includes('Save changes'));
+  const report=callReport(app.db,config,new Date(Date.now()-86400000),new Date(Date.now()+1000));assert(!report.text.includes(item.reference));
+  assert.equal(insertEnquiry(app.db,{channel:'phone',queue:'general',subject:'Replay',external_key:'call:deletion-test'}).id,item.id);
+  assert(app.db.prepare('SELECT deleted_at FROM enquiries WHERE id=?').get(item.id).deleted_at);
+  await post(path+'/delete',{reason:'test',csrf:manager.csrf},manager.cookie);
+  assert.equal(app.db.prepare('SELECT count(*) n FROM notes WHERE enquiry_id=?').get(item.id).n,1);
+  assert.equal((await post(path+'/restore',{csrf:manager.csrf},manager.cookie)).status,303);
+  assert.equal(app.db.prepare('SELECT deleted_at FROM enquiries WHERE id=?').get(item.id).deleted_at,'');
+  assert(callReport(app.db,config,new Date(Date.now()-86400000),new Date(Date.now()+1000)).text.includes(item.reference));
+});
+
+test('deleted support enquiries are skipped by the HubSpot worker',async()=>{
+  const db=openDatabase(':memory:');
+  const item=insertEnquiry(db,{channel:'web',queue:'support',subject:'Test ticket'});
+  db.prepare("UPDATE enquiries SET deleted_at=?,updated_at='2020-01-01T00:00:00.000Z' WHERE id=?").run(new Date().toISOString(),item.id);
+  let requests=0;
+  await syncSupport(db,{...config,hubspot:{...config.hubspot,token:'test',pipeline:'0',stage:'1'}},async()=>{requests++;throw Error('Must not sync deleted record');});
+  assert.equal(requests,0);db.close();
+});

@@ -37,7 +37,7 @@ function outcome(call) {
 }
 export function callReport(db,config,start,end) {
   const calls=db.prepare(`SELECT id,reference,created_at,phone,queue,store,owner,status,call_status,accepted,callback,recording_sid
-    FROM enquiries WHERE channel='phone' AND created_at>=? AND created_at<? ORDER BY created_at,id`).all(start.toISOString(),end.toISOString());
+    FROM enquiries WHERE deleted_at='' AND channel='phone' AND created_at>=? AND created_at<? ORDER BY created_at,id`).all(start.toISOString(),end.toISOString());
   const counts={total:calls.length,answered:0,voicemail:0,unanswered:0,incomplete:0,callbacks:0};
   const queues={};
   for(const call of calls){

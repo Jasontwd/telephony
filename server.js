@@ -214,15 +214,38 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
         if(path==='/logout'&&req.method==='POST'){db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);setCookie('session','',0);return redirect('/login');}
         if(path==='/staff'&&req.method==='GET') {
           const where=user.role==='manager'?'1=1':user.role==='accounts'?"queue='accounts'":"queue<>'accounts'";
-          return send(200,views.dashboard(db.prepare(`SELECT * FROM enquiries WHERE ${where} ORDER BY created_at DESC`).all(),user,session.csrf,Object.fromEntries(requestUrl.searchParams)));
+          return send(200,views.dashboard(db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND ${where} ORDER BY created_at DESC`).all(),user,session.csrf,Object.fromEntries(requestUrl.searchParams)));
+        }
+        if(path==='/staff/deleted'&&req.method==='GET') {
+          if(user.role!=='manager')fail(404,'Page not found');
+          return send(200,views.deleted(db.prepare("SELECT * FROM enquiries WHERE deleted_at<>'' ORDER BY deleted_at DESC").all(),user,session.csrf));
+        }
+        const removal=path.match(/^\/staff\/enquiries\/(\d+)\/(delete|restore)$/);
+        if(removal&&req.method==='POST') {
+          if(user.role!=='manager')fail(404,'Enquiry not found');
+          const item=db.prepare('SELECT * FROM enquiries WHERE id=?').get(Number(removal[1]));
+          if(!item)fail(404,'Enquiry not found');
+          const deleting=removal[2]==='delete',reason=value('reason',30);
+          if(deleting&&!['test','no_info','dead_call'].includes(reason))fail(400,'Choose a deletion reason');
+          if(deleting!==!!item.deleted_at) {
+            const time=new Date().toISOString();
+            db.exec('BEGIN IMMEDIATE');
+            try {
+              db.prepare('UPDATE enquiries SET deleted_at=?,updated_at=? WHERE id=?').run(deleting?time:'',time,item.id);
+              db.prepare('INSERT INTO notes(enquiry_id,author,created_at,body) VALUES(?,?,?,?)').run(item.id,user.username,time,deleting?'Moved to deleted enquiries: '+reason:'Restored enquiry');
+              db.exec('COMMIT');
+            } catch(error){db.exec('ROLLBACK');throw error;}
+          }
+          return redirect(deleting?'/staff/deleted':'/staff/enquiries/'+item.id);
         }
         if(path==='/staff/routing'&&req.method==='GET')return send(200,views.routing(config,user,session.csrf));
         const match=path.match(/^\/staff\/enquiries\/(\d+)$/);
         if(match) {
           const item=db.prepare('SELECT * FROM enquiries WHERE id=?').get(Number(match[1]));
-          if(!item||!canSee(user,item))fail(404,'Enquiry not found');
+          if(!item||!canSee(user,item)||(item.deleted_at&&user.role!=='manager'))fail(404,'Enquiry not found');
           if(req.method==='GET')return send(200,views.detail(item,db.prepare('SELECT * FROM notes WHERE enquiry_id=? ORDER BY id DESC').all(item.id),config.users,user,session.csrf,config));
           if(req.method==='POST') {
+            if(item.deleted_at)fail(409,'Restore this enquiry before editing');
             const state=value('status',30),owner=value('owner',40),due=value('due_at',10),outcome=value('outcome',20),quote=value('quote_value',30),callback=value('callback',10);
             const assigned=config.users.find(u=>u.username===owner);
             if(!statuses.includes(state)||(owner&&(!assigned||!canSee(assigned,item)))||!['','qualified','quoted','won','lost'].includes(outcome)||!['needed','complete'].includes(callback)||

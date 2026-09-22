@@ -54,6 +54,8 @@ export function openDatabase(path) {
     CREATE INDEX IF NOT EXISTS enquiry_queue_status ON enquiries(queue,status);
     CREATE INDEX IF NOT EXISTS notes_enquiry ON notes(enquiry_id);
     PRAGMA user_version=1;`);
+  if(!db.prepare('PRAGMA table_info(enquiries)').all().some(c=>c.name==='deleted_at'))
+    db.exec("ALTER TABLE enquiries ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''");
   return db;
 }
 export function insertEnquiry(db, item) {
