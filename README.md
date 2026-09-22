@@ -153,3 +153,39 @@ Only then replace personal contact numbers in the Formtech website header, showr
 ### Credential types
 
 This service requires the Twilio Account SID (AC followed by 32 hexadecimal characters) and that account's Auth Token. An OAuth client ID is not a substitute. Store credentials in Fly runtime secrets; do not put them in GitHub source or chat. The GitHub Actions secret FLY_API_TOKEN is a separate, app-scoped Fly deployment token.
+
+## Formtech branding and Shopify page embed
+
+The app uses the supplied Formtech logo, its blue background, and the website orange
+accent `#FB7C33`. `/formtech-logo.png` is a locally served asset; no third-party image
+host is needed. The public contact number is displayed as `09 870 0642`.
+
+To embed the enquiry form into a Shopify page:
+
+1. In the theme editor, create or select a page template for the contact page.
+2. Add a **Custom liquid** section. Paste the complete contents of
+   `templates/shopify-contact-embed.liquid` and save.
+3. If using a new template, assign it to the intended page. Check the published
+   page on desktop and mobile, then send one clearly labelled support test.
+
+The snippet uses `/embed`, automatically adjusts the iframe height, and includes
+an ordinary link as a fallback. Paste into Custom liquid, not the rich-text editor,
+which may strip scripts. Do not add an iframe sandbox attribute without testing:
+it can change the request origin and prevent submissions.
+
+Only `https://formtech.co.nz` and `https://www.formtech.co.nz` (plus same-origin)
+may frame the public embed endpoints. Shopify admin/theme previews or a
+`myshopify.com` hostname may not render it; verify on the published custom-domain
+page. Add any additional exact trusted origin deliberately in the CSP and
+`static/embed.js`; do not allow all Shopify stores or arbitrary origins.
+
+The embed uses a one-hour, purpose-bound signed form token and a strict same-origin
+POST check, independent of cookies. It never uses staff authentication. Existing
+staff and normal public-page CSRF protections are unchanged. Staff pages retain
+`frame-ancestors 'none'`. Rate limits, validation, duplicate-submit prevention,
+queue routing and HubSpot handoff are shared with the ordinary contact form.
+Errors and success pages retain the embed layout and framing policy.
+
+The form requires an email or phone number. No attachments or conversation
+recording are added by the embed. Test privacy links, keyboard navigation, height
+resizing and success/error views before replacing the existing Shopify contact form.

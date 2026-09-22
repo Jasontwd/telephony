@@ -144,3 +144,37 @@ test('database persists enquiries across closing and reopening the connection',(
   const item=insertEnquiry(db,{channel:'web',queue:'sales',subject:'Persistence check'});db.close();db=openDatabase(path);
   assert.equal(db.prepare('SELECT subject FROM enquiries WHERE reference=?').get(item.reference).subject,'Persistence check');db.close();
 });
+
+test('Shopify form submits without third-party cookies and preserves iframe policy',async()=>{
+  const r=await fetch(base+'/embed');
+  assert.equal(r.headers.get('set-cookie'),null);
+  const policy=r.headers.get('content-security-policy');
+  assert.match(policy,/frame-ancestors 'self' https:\/\/formtech.co.nz https:\/\/www.formtech.co.nz;/);
+  assert.ok(!policy.includes('https://*.myshopify.com'));
+  const html=await r.text();assert.match(html,/action="\/embed\/enquiries"/);
+  assert.ok(!html.includes('Staff sign in'));
+  const fields={csrf:token(html),name:'Embed test',email:'embed@example.test',queue:'support',store:'any',subject:'Shopify cookie-free submission',message:'Test embed with no cookies'};
+  const result=await post('/embed/enquiries',fields,'',{Origin:base});
+  assert.equal(result.status,201);assert.equal(result.headers.get('set-cookie'),null);
+  assert.equal(result.headers.get('content-security-policy'),policy);
+  assert.match(await result.text(),/Send another enquiry/);
+  await post('/embed/enquiries',fields,'',{Origin:base});
+  assert.equal(app.db.prepare("SELECT count(*) AS n FROM enquiries WHERE subject='Shopify cookie-free submission'").get().n,1);
+  assert.equal(app.db.prepare("SELECT queue FROM enquiries WHERE subject='Shopify cookie-free submission'").get().queue,'support');
+});
+test('embed tokens reject tampering, expiry and foreign origins; staff remains isolated',async()=>{
+  const html=await(await fetch(base+'/embed')).text();
+  const fields={csrf:token(html),name:'Blocked test',email:'embed@example.test',queue:'support',store:'any',subject:'Must not save',message:'Invalid embed'};
+  for(const origin of ['https://formtech.co.nz','https://untrusted.example','null'])assert.equal((await post('/embed/enquiries',fields,'',{Origin:origin})).status,403);
+  assert.equal((await post('/embed/enquiries',fields)).status,403);
+  assert.equal((await post('/embed/enquiries',{...fields,csrf:fields.csrf+'x'},'',{Origin:base})).status,403);
+  const raw=(Math.floor(Date.now()/1000)-3601)+'.'+'a'.repeat(40);
+  const expired=raw+'.'+hmac(config.secret,'embed:'+raw);
+  assert.equal((await post('/embed/enquiries',{...fields,csrf:expired},'',{Origin:base})).status,403);
+  assert.equal((await post('/login',{csrf:fields.csrf,username:'manager',password:'correct-test-password'},'',{Origin:base})).status,403);
+  for(const path of ['/','/login','/staff','/staff?embed=true']){
+    const response=await fetch(base+path,{redirect:'manual'});
+    assert.match(response.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  }
+  assert.equal(app.db.prepare("SELECT count(*) AS n FROM enquiries WHERE subject='Must not save'").get().n,0);
+});

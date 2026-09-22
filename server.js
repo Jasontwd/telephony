@@ -16,6 +16,8 @@ async function readBody(req) {
 }
 export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
   const css=readFileSync(new URL('./static/style.css',import.meta.url));
+  const logo=readFileSync(new URL('./static/formtech-logo.png',import.meta.url));
+  const embedJs=readFileSync(new URL('./static/embed.js',import.meta.url));
   const dummyHash=hashPassword(randomBytes(24).toString('hex'));
   const updateCall=(id,fields)=> {
     const keys=Object.keys(fields);
@@ -38,12 +40,13 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
     return `<Dial timeout="20" answerOnBridge="true" callerId="${esc(config.publicPhone)}" action="${url('/voice/dial-ended?backup='+(backup?'1':'0'))}" method="POST"><Number url="${url('/voice/confirm?parent='+encodeURIComponent(item.external_key.slice(5)))}" method="POST">${esc(dest)}</Number></Dial>`;
   };
   async function handler(req,res) {
+    const embedded=['/embed','/embed/enquiries'].includes(new URL(req.url,config.base).pathname);
     res.setHeader('X-Content-Type-Options','nosniff');
     // no-referrer makes browsers send Origin: null on form POSTs, which our
     // origin check correctly rejects. Preserve same-origin form provenance
     // while still withholding referrers from external websites.
     res.setHeader('Referrer-Policy','same-origin');
-    res.setHeader('Content-Security-Policy',"default-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors "+(embedded?"'self' https://formtech.co.nz https://www.formtech.co.nz":"'none'")+"; base-uri 'none'");
     res.setHeader('Cache-Control','no-store');
     if(config.production) res.setHeader('Strict-Transport-Security','max-age=31536000');
     const send=(code,body,type='text/html; charset=utf-8')=>{res.writeHead(code,{'Content-Type':type});res.end(body);};
@@ -53,10 +56,12 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
       const requestUrl=new URL(req.url,config.base), path=requestUrl.pathname;
       if(req.method==='GET'&&path==='/health') {db.prepare('SELECT 1').get();return send(200,'ok','text/plain');}
       if(req.method==='GET'&&path==='/style.css') return send(200,css,'text/css');
+      if(req.method==='GET'&&path==='/formtech-logo.png') return send(200,logo,'image/png');
+      if(req.method==='GET'&&path==='/embed.js') return send(200,embedJs,'text/javascript');
       const now=Math.floor(Date.now()/1000);
       db.prepare('DELETE FROM sessions WHERE expires < ?').run(now);
       const session=db.prepare('SELECT * FROM sessions WHERE token=?').get(hmac(config.secret,cookieValue(req,'session')));
-      const user=session&&config.users.find(u=>u.username===session.username);
+      const user=!embedded&&session&&config.users.find(u=>u.username===session.username);
       const ip=config.production&&process.env.FLY_APP_NAME ? String(req.headers['fly-client-ip']||req.socket.remoteAddress) : req.socket.remoteAddress;
       const ipKey=hmac(config.secret,ip||'unknown');
       const body=req.method==='POST'?await readBody(req):'';
@@ -69,6 +74,21 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
           const raw=now+'.'+randomBytes(20).toString('hex');token=raw+'.'+hmac(config.secret,raw);setCookie('form',token,3600);
         }
         return token;
+      };
+      // Public iframe forms cannot rely on third-party cookies. Use a short-lived,
+      // purpose-bound signed token and the same strict Origin check; never use
+      // this token for staff or other cookie-authenticated actions.
+      const embedToken=()=>{
+        const raw=now+'.'+randomBytes(20).toString('hex');
+        return raw+'.'+hmac(config.secret,'embed:'+raw);
+      };
+      const checkEmbedToken=()=>{
+        if(req.headers.origin!==config.base)fail(403,'Invalid request origin');
+        const token=value('csrf',200),parts=token.split('.');
+        const [stamp,nonce,sig]=parts;
+        if(parts.length!==3||!/^\d+$/.test(stamp)||!/[a-f0-9]{40}/.test(nonce)||
+          Number(stamp)<now-3600||Number(stamp)>now||!equal(sig,hmac(config.secret,'embed:'+stamp+'.'+nonce)))
+          fail(403,'Form expired. Reload the page and try again.');
       };
       const checkCsrf=()=> {
         if(req.headers.origin && req.headers.origin!==config.base) fail(403,'Invalid request origin');
@@ -136,8 +156,9 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
         return send(200,JSON.stringify({reference:item.reference}),'application/json');
       }
       if(req.method==='GET'&&path==='/') return send(200,views.contact(config,user?session.csrf:publicCsrf()));
-      if(req.method==='POST'&&path==='/enquiries') {
-        checkCsrf();
+      if(req.method==='GET'&&path==='/embed') return send(200,views.contact(config,embedToken(),'',true));
+      if(req.method==='POST'&&(path==='/enquiries'||path==='/embed/enquiries')) {
+        if(embedded)checkEmbedToken();else checkCsrf();
         if(limited(db,'form:'+ipKey,10,3600))fail(429,'Too many enquiries. Please try again later.');
         if(value('website',200))fail(400,'Unable to submit this form');
         const item={name:value('name',120),email:value('email',254),phone:value('phone',40),queue:value('queue',20),store:value('store',20),subject:value('subject',180),message:value('message',5000),channel:'web'};
@@ -148,7 +169,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
         item.owner=item.queue!=='accounts'&&config.users.some(u=>u.username===desired&&u.role!=='accounts')?desired:'';
         item.external_key='web:'+hmac(config.secret,value('csrf',200)+JSON.stringify(item));
         const saved=insertEnquiry(db,item);
-        return send(201,views.page('Enquiry received',`<div class="narrow"><div class="eyebrow">ENQUIRY RECEIVED</div><h1>Thanks. We’ll be in touch.</h1><p>Your reference is <strong>${esc(saved.reference)}</strong>. Our team will follow up during business hours.</p><a href="/">Return to contact page</a></div>`));
+        return send(201,views.page('Enquiry received',`<div class="narrow"><div class="eyebrow">ENQUIRY RECEIVED</div><h1>Thanks. We’ll be in touch.</h1><p>Your reference is <strong>${esc(saved.reference)}</strong>. Our team will follow up during business hours.</p><a href="${embedded?'/embed':'/'}">${embedded?'Send another enquiry':'Return to contact page'}</a></div>`,null,null,embedded));
       }
       if(path==='/login'&&req.method==='GET')return user?redirect('/staff'):send(200,views.login(publicCsrf()));
       if(path==='/login'&&req.method==='POST') {
@@ -200,7 +221,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
       fail(404,'Page not found');
     } catch(error) {
       if(!error.status) console.error('Request failed:',error.code||error.name);
-      send(error.status||500,views.page('Unable to complete request',`<h1>${error.status||500}</h1><p>${esc(error.status?error.message:'Please try again shortly.')}</p><a href="/">Return to contact page</a>`));
+      send(error.status||500,views.page('Unable to complete request',`<h1>${error.status||500}</h1><p>${esc(error.status?error.message:'Please try again shortly.')}</p><a href="${embedded?'/embed':'/'}">Return to contact page</a>`,null,null,embedded));
     }
   }
   const server=http.createServer(handler);
