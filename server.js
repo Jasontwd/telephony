@@ -25,7 +25,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
       .run(...Object.values(fields),new Date().toISOString(),id);
   };
   const xml = body => `<?xml version="1.0" encoding="UTF-8"?><Response>${body}</Response>`;
-  const say = text => `<Say language="en-AU">${esc(text)}</Say>`;
+  const say = text => `<Say voice="Polly.Aria-Neural" language="en-NZ">${esc(text)}</Say>`;
   const url = path => config.base+path;
   const voicemail = item => {
     updateCall(item.id,{callback:1});
