@@ -7,6 +7,7 @@ primary_region = "syd"
 
 [env]
   PUBLIC_BASE_URL = "https://telephony-kidzwq.fly.dev"
+  PUBLIC_PHONE = "+6498700642"
   NODE_ENV = "production"
   PORT = "8080"
   DB_PATH = "/data/formtech.sqlite"
