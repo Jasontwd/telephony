@@ -36,7 +36,12 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
     say('Thanks for calling Formtech 3D Printing. For our Auckland 3D showroom and production bureau, press 1. For our Christchurch 3D showroom and production bureau, press 2. For technical support and repairs, press 3. For orders and deliveries, press 4. For accounts and payments, press 5.')+'</Gather>';
   const dial=(item,route,backup=false)=> {
     const dest=backup?route.backup:route.phone;
-    if(!dest||!isOpen(config,route.store)) return voicemail(item);
+    if(!isOpen(config,route.store)) {
+      const location={auckland:'Auckland',christchurch:'Christchurch'}[route.store];
+      const closed=location?say(`Our ${location} 3D showroom and production bureau is currently closed. We will get back to you during business hours.`):'';
+      return closed+voicemail(item);
+    }
+    if(!dest) return voicemail(item);
     return `<Dial timeout="20" answerOnBridge="true" callerId="${esc(config.publicPhone)}" action="${url('/voice/dial-ended?backup='+(backup?'1':'0'))}" method="POST"><Number url="${url('/voice/confirm?parent='+encodeURIComponent(item.external_key.slice(5)))}" method="POST">${esc(dest)}</Number></Dial>`;
   };
   async function handler(req,res) {

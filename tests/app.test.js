@@ -178,3 +178,26 @@ test('embed tokens reject tampering, expiry and foreign origins; staff remains i
   }
   assert.equal(app.db.prepare("SELECT count(*) AS n FROM enquiries WHERE subject='Must not save'").get().n,0);
 });
+
+test('closed showroom choices announce the selected location before voicemail, while open routes do not',async()=>{
+  const all=Object.fromEntries(Array.from({length:7},(_,i)=>[i,['00:00','23:59']]));
+  for(const [digit,store,location] of [['1','auckland','Auckland'],['2','christchurch','Christchurch']]) {
+    const originalHours=config.hours[store], originalPhone=config.routes[digit].phone;
+    try {
+      config.hours[store]={};
+      const call='CA'+digit.repeat(32);
+      await voice('/voice/incoming',{CallSid:call});
+      const closed=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:digit})).text();
+      assert.match(closed,new RegExp(`Our ${location} 3D showroom and production bureau is currently closed`));
+      assert.ok(closed.indexOf('currently closed')<closed.indexOf('<Record'));
+      assert.ok(!closed.includes('<Dial'));
+      assert.equal(app.db.prepare('SELECT callback FROM enquiries WHERE external_key=?').get('call:'+call).callback,1);
+      config.hours[store]=all;config.routes[digit].phone='+6495550102';
+      const open=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:digit})).text();
+      assert.ok(open.includes('<Dial'));assert.ok(!open.includes('currently closed'));
+      config.routes[digit].phone='';
+      const unconfigured=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:digit})).text();
+      assert.ok(unconfigured.includes('<Record'));assert.ok(!unconfigured.includes('currently closed'));
+    } finally {config.hours[store]=originalHours;config.routes[digit].phone=originalPhone;}
+  }
+});
