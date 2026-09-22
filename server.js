@@ -33,7 +33,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
       `<Record maxLength="120" timeout="5" playBeep="true" action="${url('/voice/thanks')}" method="POST" recordingStatusCallback="${url('/voice/recording')}" recordingStatusCallbackMethod="POST"/>`+say('Thank you. Goodbye.')+'<Hangup/>';
   };
   const menu=attempt=>`<Gather numDigits="1" timeout="7" actionOnEmptyResult="true" action="${url('/voice/select?attempt='+attempt)}" method="POST">`+
-    say('Thanks for calling Formtech. For Auckland sales and demos, press 1. For Christchurch sales and demos, press 2. For technical support and repairs, press 3. For orders and deliveries, press 4. For accounts and payments, press 5.')+'</Gather>';
+    say('Thanks for calling Formtech 3D Printing. For our Auckland 3D showroom and production bureau, press 1. For our Christchurch 3D showroom and production bureau, press 2. For technical support and repairs, press 3. For orders and deliveries, press 4. For accounts and payments, press 5.')+'</Gather>';
   const dial=(item,route,backup=false)=> {
     const dest=backup?route.backup:route.phone;
     if(!dest||!isOpen(config,route.store)) return voicemail(item);
