@@ -189,3 +189,16 @@ Errors and success pages retain the embed layout and framing policy.
 The form requires an email or phone number. No attachments or conversation
 recording are added by the embed. Test privacy links, keyboard navigation, height
 resizing and success/error views before replacing the existing Shopify contact form.
+
+
+### Add Martin while preserving the manager login
+
+Open `tools/create-martin-login.html` locally, choose and confirm Martin's password,
+and save it privately. The offline helper outputs an Agent account named `martin`.
+Save its complete output as the new Fly secret `STAFF_AGENT_USERS_JSON` and deploy.
+Keep `STAFF_USERS_JSON` unchanged. The additional setting accepts only Agent accounts;
+all usernames across both settings must be unique. If the additional secret already
+exists, preserve the other entries rather than replacing the whole list.
+Martin signs in at `/login`; accounts enquiries remain inaccessible. Auckland
+enquiries can now be assigned automatically to his `martin` username.
+Removing an account requires removing it from its corresponding secret and deploying.

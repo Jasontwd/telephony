@@ -81,8 +81,12 @@ export function loadConfig(env = process.env) {
   const base = (env.PUBLIC_BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
   const parsed = new URL(base);
   if (parsed.origin !== base || (production && parsed.protocol !== 'https:')) throw Error('PUBLIC_BASE_URL must be an HTTPS origin in production');
-  const users = JSON.parse(env.STAFF_USERS_JSON || '[]');
-  if (!Array.isArray(users) || users.some(u => !/^[a-z0-9_-]{1,40}$/.test(u.username) ||
+  const primaryUsers = JSON.parse(env.STAFF_USERS_JSON || '[]');
+  const agentUsers = JSON.parse(env.STAFF_AGENT_USERS_JSON || '[]');
+  if (!Array.isArray(primaryUsers) || !Array.isArray(agentUsers) ||
+    agentUsers.some(u => !u || u.role !== 'agent')) throw Error('Invalid staff user configuration');
+  const users = [...primaryUsers, ...agentUsers];
+  if (!Array.isArray(users) || users.some(u => !u || !/^[a-z0-9_-]{1,40}$/.test(u.username) ||
     !['manager','agent','accounts'].includes(u.role) || !/^[a-f0-9]{32}:[a-f0-9]{128}$/.test(u.passwordHash)) ||
     new Set(users.map(u=>u.username)).size !== users.length) throw Error('Invalid STAFF_USERS_JSON');
   if (production && !users.some(u=>u.role==='manager')) throw Error('Configure at least one manager');
