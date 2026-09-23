@@ -4,7 +4,7 @@ import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {loadConfig,openDatabase,hashPassword,signature,hmac,insertEnquiry,isOpen} from '../core.js';
 import {createApp} from '../server.js';
-import {syncSupport} from '../hubspot.js';
+import {syncEnquiries} from '../hubspot.js';
 
 let app,base;
 const account='AC'+'1'.repeat(32),sid='CA'+'2'.repeat(32),child='CA'+'3'.repeat(32);
@@ -118,13 +118,13 @@ test('HubSpot handoff checks uniqueness, survives uncertain creation and links t
     if(opts.method==='POST'){created++;exists=true;throw Error('Simulated response loss after server commit');}
     return exists?new Response(JSON.stringify({id:'12345'})):new Response('{}',{status:404});
   };
-  await syncSupport(db,c,mock);assert.ok(db.prepare('SELECT hubspot_error FROM enquiries').get().hubspot_error);
-  db.prepare('UPDATE enquiries SET hubspot_attempt_at=0').run();await syncSupport(db,c,mock);
+  await syncEnquiries(db,c,mock);assert.ok(db.prepare('SELECT hubspot_error FROM enquiries').get().hubspot_error);
+  db.prepare('UPDATE enquiries SET hubspot_attempt_at=0').run();await syncEnquiries(db,c,mock);
   assert.equal(created,1);assert.equal(db.prepare('SELECT hubspot_ticket_id FROM enquiries WHERE id=?').get(item.id).hubspot_ticket_id,'12345');db.close();
 });
 test('HubSpot creates nothing without a verified unique property',async()=>{
   const db=openDatabase(':memory:');insertEnquiry(db,{channel:'web',queue:'support',subject:'Repair'});
-  let writes=0;await syncSupport(db,{hubspot:{token:'fake',pipeline:'0',stage:'1',referenceProperty:'reference'}},async(url,opts)=>{if(opts.method==='POST')writes++;return new Response(JSON.stringify({hasUniqueValue:false}));});
+  let writes=0;await syncEnquiries(db,{hubspot:{token:'fake',pipeline:'0',stage:'1',referenceProperty:'reference'}},async(url,opts)=>{if(opts.method==='POST')writes++;return new Response(JSON.stringify({hasUniqueValue:false}));});
   assert.equal(writes,0);assert.ok(db.prepare('SELECT hubspot_error FROM enquiries').get().hubspot_error.includes('setup required'));db.close();
 });
 test('production fails closed without staff authentication and required telephony configuration',()=>{
@@ -253,6 +253,39 @@ test('deleted support enquiries are skipped by the HubSpot worker',async()=>{
   const item=insertEnquiry(db,{channel:'web',queue:'support',subject:'Test ticket'});
   db.prepare("UPDATE enquiries SET deleted_at=?,updated_at='2020-01-01T00:00:00.000Z' WHERE id=?").run(new Date().toISOString(),item.id);
   let requests=0;
-  await syncSupport(db,{...config,hubspot:{...config.hubspot,token:'test',pipeline:'0',stage:'1'}},async()=>{requests++;throw Error('Must not sync deleted record');});
+  await syncEnquiries(db,{...config,hubspot:{...config.hubspot,token:'test',pipeline:'0',stage:'1'}},async()=>{requests++;throw Error('Must not sync deleted record');});
   assert.equal(requests,0);db.close();
+});
+
+test('all queues and channels backfill into tickets without deleted or already-linked records',async()=>{
+  const db=openDatabase(':memory:');
+  const c={base,hubspot:{token:'fake',pipeline:'0',stage:'1',referenceProperty:'formtech_reference'}};
+  for(const queue of ['sales','general','orders','accounts','support'])insertEnquiry(db,{channel:queue==='accounts'?'email':'web',queue,subject:queue,owner:'jason'});
+  const call=insertEnquiry(db,{channel:'phone',queue:'sales',subject:'Old call'});
+  db.prepare("UPDATE enquiries SET updated_at='2020-01-01T00:00:00.000Z' WHERE id=?").run(call.id);
+  const linked=insertEnquiry(db,{channel:'web',queue:'sales',subject:'Already linked'});
+  db.prepare("UPDATE enquiries SET hubspot_ticket_id='9876' WHERE id=?").run(linked.id);
+  const removed=insertEnquiry(db,{channel:'web',queue:'general',subject:'Deleted'});
+  db.prepare("UPDATE enquiries SET deleted_at='2020-01-01' WHERE id=?").run(removed.id);
+  const sent=[];
+  const mock=async(url,opts)=>{
+    if(url.includes('/properties/'))return new Response(JSON.stringify({hasUniqueValue:true}));
+    if(opts.method==='POST'){sent.push(JSON.parse(opts.body).properties);return new Response(JSON.stringify({id:String(1000+sent.length)}));}
+    return new Response('{}',{status:404});
+  };
+  await syncEnquiries(db,c,mock);assert.equal(sent.length,6);
+  for(const queue of ['sales','general','orders','accounts','support'])assert(sent.some(p=>p.content.includes('Queue: '+queue)));
+  assert(sent.every(p=>p.hs_pipeline==='0'&&p.hs_pipeline_stage==='1'));
+  await syncEnquiries(db,c,mock);assert.equal(sent.length,6);db.close();
+});
+test('unsettled phone calls do not block website tickets behind the batch limit',async()=>{
+  const db=openDatabase(':memory:');for(let i=0;i<12;i++)insertEnquiry(db,{channel:'phone',queue:'sales',subject:'In progress'});
+  const web=insertEnquiry(db,{channel:'web',queue:'general',subject:'Repair enquiry'});
+  let sent=0;
+  await syncEnquiries(db,{base,hubspot:{token:'fake',pipeline:'0',stage:'1',referenceProperty:'formtech_reference'}},async(url,opts)=>{
+    if(url.includes('/properties/'))return new Response(JSON.stringify({hasUniqueValue:true}));
+    if(opts.method==='POST'){sent++;return new Response(JSON.stringify({id:'999'}));}
+    return new Response('{}',{status:404});
+  });
+  assert.equal(sent,1);assert.equal(db.prepare('SELECT hubspot_ticket_id FROM enquiries WHERE id=?').get(web.id).hubspot_ticket_id,'999');db.close();
 });

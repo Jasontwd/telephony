@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {loadConfig,openDatabase,insertEnquiry,limited,signature,equal,hmac,checkPassword,hashPassword,esc,queues,stores,statuses,isOpen,canSee} from './core.js';
 import * as views from './views.js';
-import {syncSupport} from './hubspot.js';
+import {syncEnquiries} from './hubspot.js';
 
 const fail = (status,message) => { throw Object.assign(Error(message),{status}); };
 const cookieValue = (req,key) => (req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(key+'='))?.slice(key.length+1)||'';
@@ -278,7 +278,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])) {
   const config=loadConfig();
   const {server,db}=createApp(config);
   let syncing=false;
-  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncSupport(db,config);}catch(e){console.error('Support handoff failed');}finally{syncing=false;}},30000);
+  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncEnquiries(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
   timer.unref();
   let summaryBusy=false;
   const summaryTick=async()=>{if(summaryBusy)return;summaryBusy=true;try{await runCallSummary(db,config);}catch{console.error('Call summary check failed');}finally{summaryBusy=false;}};

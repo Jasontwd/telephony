@@ -9,7 +9,7 @@ First working version of Formtech's public enquiry form, staff call/enquiry work
 - Assignments, callback tasks, next actions, due dates, sales outcomes, quote values and an audit trail.
 - Twilio voice webhooks: press 1 Auckland, 2 Christchurch, 3 support, 4 orders, 5 accounts.
 - NZ local business hours, configurable closure dates, one backup destination per route, answer confirmation, shared voicemail and call metadata.
-- Durable HubSpot handoff for new support forms and phone enquiries. A unique HubSpot reference property prevents duplicate tickets after timeouts.
+- Durable HubSpot ticket handoff for every active enquiry queue and channel (sales, general, orders, accounts and support). A unique HubSpot reference property prevents duplicate tickets after timeouts.
 - Optional signed email ingestion bridge for orders@ and accounts@. support@ is deliberately excluded.
 - Tests, Docker image, Fly configuration and GitHub deployment workflow.
 
@@ -19,7 +19,7 @@ First working version of Formtech's public enquiry form, staff call/enquiry work
 
 Node.js 24, server-rendered HTML and SQLite on one persistent Fly Volume. There are no third-party runtime packages. The initial service must run on **one Machine**: Fly Volumes are not shared databases. Do not scale horizontally. Move to PostgreSQL before adding multiple application Machines. This trades high availability for a small initial deployment; a machine/volume outage interrupts service until restored.
 
-The dashboard is a call/enquiry workspace, not a second support desk. HubSpot owns support replies, ticket status and support ownership. Local support status and notes are for call follow-up only and are not synced back to HubSpot. The initial integration creates a ticket with customer details in its description; it does not automatically associate or create contacts, import existing tickets, sync HubSpot status, or create HubSpot sales deals. Phone support handoff waits for five minutes without new call events so voicemail information can settle. Later recording changes remain visible in the linked local call record.
+The dashboard is a call/enquiry workspace, not a second support desk. HubSpot owns support replies, ticket status and support ownership. Local support status and notes are for call follow-up only and are not synced back to HubSpot. The initial integration creates a ticket with customer details in its description; it does not automatically associate or create contacts, import existing tickets, sync HubSpot status, or create HubSpot sales deals. Phone enquiry handoff waits for five minutes without new call events so voicemail information can settle. Later recording changes remain visible in the linked local call record.
 
 The email bridge is an API contract, not an installed Microsoft 365/Google Workspace connector. It does not send replies or ingest attachments. Voicemail is played from the authenticated Twilio console; recording IDs are visible only to authorised staff. Calls themselves are not recorded. Outbound business-caller-ID calling, SMS, notifications, attachment upload, pagination and advanced performance reports are not part of this first version.
 
@@ -122,7 +122,7 @@ HOURS_JSON can replace all hours, with keys `auckland`, `christchurch`, `general
 
 That example opens Mondays only; do not use it as the full week schedule.
 
-## HubSpot support handoff
+## HubSpot ticket handoff
 
 Keep support@ connected to the existing HubSpot help desk. Do not forward it into this app. Set up a HubSpot private app credential for the intended existing support portal, with tickets read/write and ticket-property read permission. Store it only as `HUBSPOT_ACCESS_TOKEN` in Fly secrets; the ChatGPT HubSpot connection is not a runtime credential.
 
@@ -130,7 +130,7 @@ Set HUBSPOT_PORTAL_ID, HUBSPOT_TICKET_PIPELINE and HUBSPOT_TICKET_STAGE. The con
 
 Create a **unique-value string ticket property** named `formtech_reference` (or set HUBSPOT_REFERENCE_PROPERTY to your equivalent). The app checks `hasUniqueValue` before creating tickets and refuses to create them without that guarantee. If your HubSpot plan does not permit this property, the handoff needs an alternative idempotency design before enabling it. An existing ticket is looked up by that property before any create attempt. Failed deliveries remain visible and retry roughly every minute. No test ticket is created automatically at startup.
 
-When the integration is absent, support submissions are stored locally and visibly marked as awaiting handoff. Staff must monitor this queue; there is no external failure alert yet. Once handed over, open the ticket link for support work. The local dashboard never treats its status as HubSpot's ticket status.
+When the integration is absent, all submissions are stored locally and visibly marked as awaiting handoff. Staff must monitor these queues; there is no external failure alert yet. Once handed over, open the ticket link for support work. The local dashboard never treats its status as HubSpot's ticket status.
 
 References: [HubSpot tickets API](https://developers.hubspot.com/docs/api-reference/legacy/crm/objects/tickets/guide), [Twilio webhook security](https://www.twilio.com/docs/usage/security), [Fly GitHub deployment](https://fly.io/docs/launch/continuous-deployment-with-github-actions/).
 
@@ -217,3 +217,5 @@ To activate delivery:
 A persistent SQLite job prevents repeat sends after a restart. A frozen payload and Resend idempotency key protect retries after uncertain network results. Retries stop after 23 hours and mark the job `needs_review`; check Resend before any manual resend. `accepted` means accepted by Resend, not confirmed inbox delivery; inspect delivery/bounce events in Resend. Keep the Fly machine running (the existing configuration does). A restart catches up the current day's due report; whole missed days are not backfilled. Because the window is exactly 24 hours, the two NZ daylight-saving change days can overlap or omit one hour relative to the preceding daily report. Disable with `CALL_SUMMARY_ENABLED=false`.
 
 Sender credentials are required: deployment alone does not activate outgoing email. Email carries caller numbers to the configured recipient; no recordings or message contents are included. Only managers can view the report because it includes all departments, including accounts.
+
+All non-deleted local enquiries without a HubSpot ticket are eligible, including existing backlog and resolved/waiting records. The worker runs every 30 seconds in batches of 10. Phone records wait five minutes after their last update; website and ingested email records do not. All queues use the configured ticket pipeline/stage (currently Support Pipeline / New); the ticket description includes the originating queue, store and local owner. The local owner is descriptive only, not an automatic HubSpot owner assignment. Existing HubSpot links and deleted records are excluded. HubSpot permissions govern visibility of tickets there, including Accounts tickets; local queue restrictions remain unchanged.
