@@ -56,6 +56,9 @@ export function openDatabase(path) {
     PRAGMA user_version=1;`);
   if(!db.prepare('PRAGMA table_info(enquiries)').all().some(c=>c.name==='deleted_at'))
     db.exec("ALTER TABLE enquiries ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''");
+  for(const [name,type] of Object.entries({archived_at:"TEXT NOT NULL DEFAULT ''",hubspot_owner_id:"TEXT NOT NULL DEFAULT ''",hubspot_stage:"TEXT NOT NULL DEFAULT ''",hubspot_checked_at:"INTEGER NOT NULL DEFAULT 0",hubspot_sync_error:"TEXT NOT NULL DEFAULT ''"})) {
+    if(!db.prepare('PRAGMA table_info(enquiries)').all().some(c=>c.name===name))db.exec(`ALTER TABLE enquiries ADD COLUMN ${name} ${type}`);
+  }
   return db;
 }
 export function insertEnquiry(db, item) {

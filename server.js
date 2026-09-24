@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {loadConfig,openDatabase,insertEnquiry,limited,signature,equal,hmac,checkPassword,hashPassword,esc,queues,stores,statuses,isOpen,canSee} from './core.js';
 import * as views from './views.js';
-import {syncEnquiries} from './hubspot.js';
+import {syncEnquiries,syncTicketProgress} from './hubspot.js';
 
 const fail = (status,message) => { throw Object.assign(Error(message),{status}); };
 const cookieValue = (req,key) => (req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(key+'='))?.slice(key.length+1)||'';
@@ -214,7 +214,11 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
         if(path==='/logout'&&req.method==='POST'){db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);setCookie('session','',0);return redirect('/login');}
         if(path==='/staff'&&req.method==='GET') {
           const where=user.role==='manager'?'1=1':user.role==='accounts'?"queue='accounts'":"queue<>'accounts'";
-          return send(200,views.dashboard(db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND ${where} ORDER BY created_at DESC`).all(),user,session.csrf,Object.fromEntries(requestUrl.searchParams)));
+          return send(200,views.dashboard(db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND archived_at='' AND ${where} ORDER BY created_at DESC`).all(),user,session.csrf,Object.fromEntries(requestUrl.searchParams)));
+        }
+        if(path==='/staff/archived'&&req.method==='GET') {
+          const where=user.role==='manager'?'1=1':user.role==='accounts'?"queue='accounts'":"queue<>'accounts'";
+          return send(200,views.archived(db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND archived_at<>'' AND ${where} ORDER BY archived_at DESC`).all(),user,session.csrf));
         }
         if(path==='/staff/deleted'&&req.method==='GET') {
           if(user.role!=='manager')fail(404,'Page not found');
@@ -245,7 +249,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
           if(!item||!canSee(user,item)||(item.deleted_at&&user.role!=='manager'))fail(404,'Enquiry not found');
           if(req.method==='GET')return send(200,views.detail(item,db.prepare('SELECT * FROM notes WHERE enquiry_id=? ORDER BY id DESC').all(item.id),config.users,user,session.csrf,config));
           if(req.method==='POST') {
-            if(item.deleted_at)fail(409,'Restore this enquiry before editing');
+            if(item.deleted_at||item.archived_at)fail(409,'This enquiry is deleted or managed in HubSpot');
             const state=value('status',30),owner=value('owner',40),due=value('due_at',10),outcome=value('outcome',20),quote=value('quote_value',30),callback=value('callback',10);
             const assigned=config.users.find(u=>u.username===owner);
             if(!statuses.includes(state)||(owner&&(!assigned||!canSee(assigned,item)))||!['','qualified','quoted','won','lost'].includes(outcome)||!['needed','complete'].includes(callback)||
@@ -278,7 +282,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])) {
   const config=loadConfig();
   const {server,db}=createApp(config);
   let syncing=false;
-  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncEnquiries(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
+  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncTicketProgress(db,config);await syncEnquiries(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
   timer.unref();
   let summaryBusy=false;
   const summaryTick=async()=>{if(summaryBusy)return;summaryBusy=true;try{await runCallSummary(db,config);}catch{console.error('Call summary check failed');}finally{summaryBusy=false;}};

@@ -36,14 +36,14 @@ function outcome(call) {
   return ['completed','busy','failed','no-answer','canceled'].includes(call.call_status)?'Unanswered':'In progress / incomplete';
 }
 export function callReport(db,config,start,end) {
-  const calls=db.prepare(`SELECT id,reference,created_at,phone,queue,store,owner,status,call_status,accepted,callback,recording_sid
+  const calls=db.prepare(`SELECT id,reference,created_at,phone,queue,store,owner,status,call_status,accepted,callback,recording_sid,archived_at
     FROM enquiries WHERE deleted_at='' AND channel='phone' AND created_at>=? AND created_at<? ORDER BY created_at,id`).all(start.toISOString(),end.toISOString());
   const counts={total:calls.length,answered:0,voicemail:0,unanswered:0,incomplete:0,callbacks:0};
   const queues={};
   for(const call of calls){
     const state=outcome(call);
     counts[state==='Answered'?'answered':state==='Voicemail'?'voicemail':state==='Unanswered'?'unanswered':'incomplete']++;
-    if(call.callback&&call.status!=='resolved')counts.callbacks++;
+    if(call.callback&&call.status!=='resolved'&&!call.archived_at)counts.callbacks++;
     queues[call.queue]=(queues[call.queue]||0)+1;
   }
   const window=`${display(start)} to ${display(end)} (New Zealand time)`;
@@ -52,7 +52,7 @@ export function callReport(db,config,start,end) {
   const items=shown.map(call=>({
     time:display(call.created_at),caller:call.phone||'Number withheld / unavailable',
     route:`${call.queue} / ${call.store==='any'?'General':call.store}`,owner:call.owner||'Unassigned',
-    result:outcome(call),callback:call.callback&&call.status!=='resolved'?'Yes':'No',
+    result:outcome(call),callback:call.callback&&call.status!=='resolved'&&!call.archived_at?'Yes':'No',
     reference:call.reference,url:`${config.base}/staff/enquiries/${call.id}`
   }));
   const queueText=Object.entries(queues).map(([k,v])=>`${k}: ${v}`).join(' | ')||'No calls logged.';

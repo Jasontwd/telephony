@@ -289,3 +289,15 @@ test('unsettled phone calls do not block website tickets behind the batch limit'
   });
   assert.equal(sent,1);assert.equal(db.prepare('SELECT hubspot_ticket_id FROM enquiries WHERE id=?').get(web.id).hubspot_ticket_id,'999');db.close();
 });
+
+test('archived enquiries leave active lists while preserving accounts access restrictions',async()=>{
+  const account=insertEnquiry(app.db,{channel:'web',queue:'accounts',subject:'Archived confidential invoice'});
+  const sale=insertEnquiry(app.db,{channel:'web',queue:'sales',subject:'Archived sales request'});
+  app.db.prepare('UPDATE enquiries SET archived_at=? WHERE id IN (?,?)').run(new Date().toISOString(),account.id,sale.id);
+  const manager=await signIn('manager'),agent=await signIn('agent');
+  const active=await(await fetch(base+'/staff',{headers:{Cookie:manager.cookie}})).text();assert(!active.includes('Archived sales request'));assert(!active.includes('Archived confidential invoice'));
+  const archive=await(await fetch(base+'/staff/archived',{headers:{Cookie:agent.cookie}})).text();assert(archive.includes('Archived sales request'));assert(!archive.includes('Archived confidential invoice'));
+  assert.equal((await fetch(base+'/staff/enquiries/'+account.id,{headers:{Cookie:agent.cookie}})).status,404);
+  const detail=await(await fetch(base+'/staff/enquiries/'+sale.id,{headers:{Cookie:manager.cookie}})).text();assert(!detail.includes('Save changes'));assert(detail.includes('Continue working on the linked HubSpot ticket'));
+  assert.equal((await post('/staff/enquiries/'+sale.id,{csrf:manager.csrf},manager.cookie)).status,409);
+});

@@ -43,3 +43,43 @@ export async function syncEnquiries(db,config,fetcher=fetch) {
     }
   }
 }
+
+// Read HubSpot ownership/status back into the local workspace. Never delete a ticket.
+export async function syncTicketProgress(db,config,fetcher=fetch,now=new Date()) {
+  const hs=config.hubspot;
+  if(!hs?.token||!hs.pipeline||!hs.stage)return;
+  const seconds=Math.floor(now.getTime()/1000);
+  const items=db.prepare("SELECT id,hubspot_ticket_id FROM enquiries WHERE deleted_at='' AND archived_at='' AND hubspot_ticket_id<>'' AND hubspot_checked_at<? ORDER BY hubspot_checked_at,id LIMIT 50").all(seconds-60);
+  if(!items.length)return;
+  for(const item of items)db.prepare('UPDATE enquiries SET hubspot_checked_at=? WHERE id=?').run(seconds,item.id);
+  try {
+    const response=await fetcher('https://api.hubapi.com/crm/v3/objects/tickets/batch/read',{
+      method:'POST',signal:AbortSignal.timeout(15000),
+      headers:{Authorization:`Bearer ${hs.token}`,'Content-Type':'application/json'},
+      body:JSON.stringify({properties:['hubspot_owner_id','hs_pipeline_stage','hs_pipeline'],inputs:items.map(i=>({id:i.hubspot_ticket_id}))})
+    });
+    if(!response.ok)throw Error('Could not check HubSpot ticket progress; retry scheduled');
+    const body=await response.json();
+    if(!Array.isArray(body.results))throw Error('Invalid HubSpot progress response; retry scheduled');
+    const results=new Map(body.results.map(r=>[String(r.id),r]));
+    for(const item of items) {
+      const result=results.get(item.hubspot_ticket_id),props=result?.properties;
+      if(!props||result.archived||typeof props.hs_pipeline_stage!=='string'||typeof props.hs_pipeline!=='string'||!Object.hasOwn(props,'hubspot_owner_id')) {
+        db.prepare('UPDATE enquiries SET hubspot_sync_error=? WHERE id=?').run('Ticket progress unavailable; kept in active enquiries',item.id);continue;
+      }
+      const owner=typeof props.hubspot_owner_id==='string'?props.hubspot_owner_id.trim():'',stage=props.hs_pipeline_stage;
+      const archive=/^[1-9][0-9]*$/.test(owner)&&props.hs_pipeline===hs.pipeline&&stage!==''&&stage!==hs.stage;
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare("UPDATE enquiries SET hubspot_owner_id=?,hubspot_stage=?,hubspot_sync_error='' WHERE id=? AND deleted_at=''").run(owner,stage,item.id);
+        if(archive) {
+          const updated=db.prepare("UPDATE enquiries SET archived_at=? WHERE id=? AND deleted_at='' AND archived_at=''").run(now.toISOString(),item.id);
+          if(updated.changes)db.prepare('INSERT INTO notes(enquiry_id,author,created_at,body) VALUES(?,?,?,?)').run(item.id,'HubSpot sync',now.toISOString(),`Archived after HubSpot ticket ${item.hubspot_ticket_id} was assigned to owner ${owner} and moved from New to stage ${stage}.`);
+        }
+        db.exec('COMMIT');
+      } catch(error){db.exec('ROLLBACK');throw error;}
+    }
+  } catch {
+    for(const item of items)db.prepare('UPDATE enquiries SET hubspot_sync_error=? WHERE id=?').run('Unable to check HubSpot ticket progress; retry scheduled',item.id);
+  }
+}
