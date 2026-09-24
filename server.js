@@ -1,3 +1,4 @@
+import {runFollowups} from './followup.js';
 import {runCallSummary,callReport,summaryStatus,queueTestSummary} from './call-summary.js';
 import http from 'node:http';
 import {readFileSync} from 'node:fs';
@@ -282,7 +283,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])) {
   const config=loadConfig();
   const {server,db}=createApp(config);
   let syncing=false;
-  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncTicketProgress(db,config);await syncEnquiries(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
+  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncTicketProgress(db,config);await runFollowups(db,config);await syncEnquiries(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
   timer.unref();
   let summaryBusy=false;
   const summaryTick=async()=>{if(summaryBusy)return;summaryBusy=true;try{await runCallSummary(db,config);}catch{console.error('Call summary check failed');}finally{summaryBusy=false;}};

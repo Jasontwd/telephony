@@ -6,6 +6,7 @@ primary_region = "syd"
   dockerfile = "Dockerfile"
 
 [env]
+  FOLLOWUP_EMAIL_ENABLED = "true"
   PUBLIC_BASE_URL = "https://telephony-kidzwq.fly.dev"
   PUBLIC_PHONE = "+6498700642"
   CALL_SUMMARY_ENABLED = "true"
