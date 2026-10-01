@@ -19,6 +19,19 @@ jobs:
           node-version: '24'
       - run: npm test
       - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Apply configured daily summary recipient
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          recipient=$(python -c 'import tomllib; print(tomllib.load(open("fly.toml", "rb"))["env"]["CALL_SUMMARY_TO"])')
+          trap 'rm -f "$RUNNER_TEMP/fly-recipient.log"' EXIT
+          if timeout 60 flyctl secrets set "CALL_SUMMARY_TO=$recipient" --stage -a telephony-kidzwq > "$RUNNER_TEMP/fly-recipient.log" 2>&1; then
+            echo "Daily summary recipient staged."
+          else
+            echo "::error::Could not stage daily summary recipient."
+            exit 1
+          fi
       - name: Deploy without publishing application logs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

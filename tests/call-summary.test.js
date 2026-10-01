@@ -24,7 +24,7 @@ test('report counts only incoming phone records within boundaries and escapes ca
 });
 test('missing sender never sends; daily trigger starts next scheduled morning and sends once',async()=>{
   const db=openDatabase(':memory:');let sends=0;
-  const sender=async(url,options)=>{sends++;assert.equal(url,'https://api.resend.com/emails');assert.deepEqual(JSON.parse(options.body).to,['jason@formtech.co.nz']);return {ok:true,json:async()=>({id:'test-message-id'})};};
+  const sender=async(url,options)=>{sends++;assert.equal(url,'https://api.resend.com/emails');assert.deepEqual(JSON.parse(options.body).to,['orders@formtech.co.nz']);return {ok:true,json:async()=>({id:'test-message-id'})};};
   assert.equal((await runCallSummary(db,{...config,summary:{...config.summary,from:''}},sender)).status,'not_configured');
   await activate(db);assert.equal((await runCallSummary(db,config,sender,at('2026-09-21T19:59:59Z'))).status,'idle');
   assert.equal((await runCallSummary(db,config,sender,at('2026-09-21T20:00:00Z'))).status,'accepted');

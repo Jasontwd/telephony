@@ -11,7 +11,7 @@ const display=date=>new Intl.DateTimeFormat('en-NZ',{timeZone:zone,dateStyle:'me
 export function loadSummaryConfig(env) {
   const hour=Number(env.CALL_SUMMARY_HOUR||8);
   if(!Number.isInteger(hour)||hour<4||hour>23)throw Error('CALL_SUMMARY_HOUR must be 4 through 23 (NZ time)');
-  const to=(env.CALL_SUMMARY_TO||'jason@formtech.co.nz').trim().toLowerCase();
+  const to=(env.CALL_SUMMARY_TO||'orders@formtech.co.nz').trim().toLowerCase();
   const from=(env.CALL_SUMMARY_FROM||'').trim();
   const email=/^[^\s@<>;,]+@[^\s@<>;,]+\.[^\s@<>;,]+$/;
   if(!email.test(to)||(from&&!email.test(from)))throw Error('Invalid call summary email address');
