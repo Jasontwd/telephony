@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {resolve} from 'node:path';
 import {loadConfig,openDatabase,insertEnquiry,limited,signature,equal,hmac,checkPassword,hashPassword,esc,queues,stores,statuses,isOpen,canSee} from './core.js';
 import * as views from './views.js';
-import {syncEnquiries,syncTicketProgress} from './hubspot.js';
+import {syncEnquiries,syncTicketProgress,syncTranscripts} from './hubspot.js';
 
 const fail = (status,message) => { throw Object.assign(Error(message),{status}); };
 const cookieValue = (req,key) => (req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(key+'='))?.slice(key.length+1)||'';
@@ -31,8 +31,8 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
   const url = path => config.base+path;
   const voicemail = item => {
     updateCall(item.id,{callback:1});
-    return say('Please leave your name, phone number and a short message after the beep. Your message will be recorded for the Formtech team to follow up.')+
-      `<Record maxLength="120" timeout="5" playBeep="true" action="${url('/voice/thanks')}" method="POST" recordingStatusCallback="${url('/voice/recording')}" recordingStatusCallbackMethod="POST"/>`+say('Thank you. Goodbye.')+'<Hangup/>';
+    return say('Please help us prepare for your callback. After the beep, tell us your name, your callback number, and what you need help with. If relevant, include your printer model or order number and describe the problem. Please leave a message so we can direct your enquiry to the right person. Your message will be recorded and transcribed for the Formtech team. Press hash when you have finished.')+
+      `<Record maxLength="115" timeout="8" finishOnKey="#" playBeep="true" transcribe="true" transcribeCallback="${url('/voice/transcription')}" action="${url('/voice/thanks')}" method="POST" recordingStatusCallback="${url('/voice/recording')}" recordingStatusCallbackMethod="POST"/>`+say('Thank you. Goodbye.')+'<Hangup/>';
   };
   const menu=attempt=>`<Gather numDigits="1" timeout="7" actionOnEmptyResult="true" action="${url('/voice/select?attempt='+attempt)}" method="POST">`+
     say('Thanks for calling Formtech 3D Printing. For our Auckland 3D showroom and production bureau, press 1. For our Christchurch 3D showroom and production bureau, press 2. For technical support and repairs, press 3. For orders and deliveries, press 4. For accounts and payments, press 5.')+'</Gather>';
@@ -135,9 +135,19 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
           const route=Object.values(config.routes).find(r=>r.queue===item.queue&&r.store===item.store);
           return send(200,xml(route?.backup&&requestUrl.searchParams.get('backup')!=='1'?dial(item,route,true):voicemail(item)),'text/xml');
         }
+        if(path==='/voice/transcription') {
+          const recording=value('RecordingSid',64),transcription=value('TranscriptionSid',64),state=value('TranscriptionStatus',30),text=value('TranscriptionText',12000);
+          if(!/^RE[a-fA-F0-9]{32}$/.test(recording)||!/^TR[a-fA-F0-9]{32}$/.test(transcription)||!['completed','failed'].includes(state))fail(400,'Invalid transcription');
+          if(item.recording_sid&&item.recording_sid!==recording)fail(409,'Recording does not match this call');
+          if(item.deleted_at)return send(200,xml(''),'text/xml');
+          if(item.transcription_status==='completed')return send(200,xml(''),'text/xml');
+          const status=state==='completed'&&text.trim()?'completed':'failed';
+          updateCall(item.id,{recording_sid:recording,transcription_sid:transcription,transcription_status:status,voicemail_transcript:status==='completed'?text:'',call_status:'voicemail'});
+          return send(200,xml(''),'text/xml');
+        }
         if(path==='/voice/recording') {
           const recording=value('RecordingSid',64);
-          if(value('RecordingStatus',40)==='completed'&&/^RE[a-fA-F0-9]{32}$/.test(recording)&&item.recording_sid!==recording)updateCall(item.id,{recording_sid:recording,callback:1,call_status:'voicemail'});
+          if(value('RecordingStatus',40)==='completed'&&/^RE[a-fA-F0-9]{32}$/.test(recording)&&item.recording_sid!==recording)updateCall(item.id,{recording_sid:recording,callback:1,call_status:'voicemail',transcription_status:item.transcription_status||'pending'});
           return send(200,xml(''),'text/xml');
         }
         if(path==='/voice/status') {
@@ -283,7 +293,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])) {
   const config=loadConfig();
   const {server,db}=createApp(config);
   let syncing=false;
-  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncTicketProgress(db,config);await runFollowups(db,config);await syncEnquiries(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
+  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await syncTicketProgress(db,config);await runFollowups(db,config);await syncEnquiries(db,config);await syncTranscripts(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
   timer.unref();
   let summaryBusy=false;
   const summaryTick=async()=>{if(summaryBusy)return;summaryBusy=true;try{await runCallSummary(db,config);}catch{console.error('Call summary check failed');}finally{summaryBusy=false;}};

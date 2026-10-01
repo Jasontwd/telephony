@@ -25,7 +25,7 @@ export async function syncEnquiries(db,config,fetcher=fetch) {
       let response=await request(`/crm/v3/objects/tickets/${encodeURIComponent(item.reference)}?idProperty=${encodeURIComponent(hs.referenceProperty)}`);
       if(response.status===404) {
         const content=[`Formtech reference: ${item.reference}`,`Channel: ${item.channel}`,`Name: ${item.name}`,
-          `Email: ${item.email}`,`Phone: ${item.phone}`,`Store: ${item.store}`,`Queue: ${item.queue}`,`Local owner: ${item.owner||'Unassigned'}`,item.message,
+          `Email: ${item.email}`,`Phone: ${item.phone}`,`Store: ${item.store}`,`Queue: ${item.queue}`,`Local owner: ${item.owner||'Unassigned'}`,item.message,item.voicemail_transcript?`Voicemail transcript (automatic): ${item.voicemail_transcript}`:'',
           item.channel==='phone'?`Call: ${item.external_key}; state: ${item.call_status}; callback needed: ${item.callback?'yes':'no'}; recording ID: ${item.recording_sid||'none'}`:'',
           `Call/enquiry details: ${config.base}/staff/enquiries/${item.id}`].filter(Boolean).join('\n');
         response=await request('/crm/v3/objects/tickets',{method:'POST',body:JSON.stringify({properties:{
@@ -81,5 +81,31 @@ export async function syncTicketProgress(db,config,fetcher=fetch,now=new Date())
     }
   } catch {
     for(const item of items)db.prepare('UPDATE enquiries SET hubspot_sync_error=? WHERE id=?').run('Unable to check HubSpot ticket progress; retry scheduled',item.id);
+  }
+}
+
+// A dedicated property avoids overwriting staff-edited ticket descriptions.
+export async function syncTranscripts(db,config,fetcher=fetch) {
+  const hs=config.hubspot;if(!hs?.token)return;
+  const now=Math.floor(Date.now()/1000);
+  const items=db.prepare("SELECT * FROM enquiries WHERE deleted_at='' AND hubspot_ticket_id<>'' AND voicemail_transcript<>'' AND voicemail_transcript<>transcript_synced AND transcript_attempt_at<? ORDER BY transcript_attempt_at,id LIMIT 10").all(now-60);
+  if(!items.length)return;
+  const request=(path,options={})=>fetcher('https://api.hubapi.com'+path,{...options,signal:AbortSignal.timeout(10000),headers:{Authorization:`Bearer ${hs.token}`,'Content-Type':'application/json'}});
+  for(const item of items)db.prepare('UPDATE enquiries SET transcript_attempt_at=? WHERE id=?').run(now,item.id);
+  try {
+    const path='/crm/v3/properties/tickets/formtech_voicemail_transcript';
+    let property=await request(path);
+    if(property.status===404) {
+      property=await request('/crm/v3/properties/tickets',{method:'POST',body:JSON.stringify({name:'formtech_voicemail_transcript',label:'Formtech voicemail transcript',type:'string',fieldType:'textarea',groupName:'ticketinformation',description:'Automatic voicemail transcript from Formtech. Verify important details against the recording.'})});
+      if(property.status===409)property=await request(path);
+    }
+    if(!property.ok)throw Error('property');
+    for(const item of items) {
+      const response=await request('/crm/v3/objects/tickets/'+encodeURIComponent(item.hubspot_ticket_id),{method:'PATCH',body:JSON.stringify({properties:{formtech_voicemail_transcript:item.voicemail_transcript}})});
+      if(!response.ok){db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run('HubSpot transcript delivery pending; will retry',item.id);continue;}
+      db.prepare("UPDATE enquiries SET transcript_synced=?,transcript_error='' WHERE id=?").run(item.voicemail_transcript,item.id);
+    }
+  }catch {
+    for(const item of items)db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run('HubSpot transcript sync needs ticket-property permissions or a retry. Transcript is saved here.',item.id);
   }
 }

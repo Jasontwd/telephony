@@ -301,3 +301,30 @@ test('archived enquiries leave active lists while preserving accounts access res
   const detail=await(await fetch(base+'/staff/enquiries/'+sale.id,{headers:{Cookie:manager.cookie}})).text();assert(!detail.includes('Save changes'));assert(detail.includes('Continue working on the linked HubSpot ticket'));
   assert.equal((await post('/staff/enquiries/'+sale.id,{csrf:manager.csrf},manager.cookie)).status,409);
 });
+
+test('voicemail requests transcription and signed callbacks safely populate the message',async()=>{
+  const call='CA'+'b'.repeat(32),rec='RE'+'c'.repeat(32),tr='TR'+'d'.repeat(32);
+  await voice('/voice/incoming',{CallSid:call});
+  const prompt=await(await voice('/voice/select?attempt=1',{CallSid:call,Digits:'9'})).text();
+  assert.match(prompt,/what you need help with/);assert.match(prompt,/recorded and transcribed/);assert.match(prompt,/transcribe="true"/);assert.match(prompt,/maxLength="115"/);
+  const fields={CallSid:call,RecordingSid:rec,TranscriptionSid:tr,TranscriptionStatus:'completed',TranscriptionText:'Printer needs a new nozzle <script>bad</script>'};
+  assert.equal((await post('/voice/transcription',fields)).status,403);
+  assert.equal((await voice('/voice/transcription',fields)).status,200);
+  await voice('/voice/recording',{CallSid:call,RecordingSid:rec,RecordingStatus:'completed'});
+  await voice('/voice/transcription',fields);await voice('/voice/transcription',{...fields,TranscriptionStatus:'failed',TranscriptionText:''});
+  const row=app.db.prepare('SELECT * FROM enquiries WHERE external_key=?').get('call:'+call);assert.equal(row.voicemail_transcript,fields.TranscriptionText);assert.equal(row.transcription_status,'completed');
+  assert.equal((await voice('/voice/transcription',{...fields,RecordingSid:'RE'+'e'.repeat(32)})).status,409);
+  const views=await import('../views.js');const html=views.detail(row,[],config.users,{username:'manager',role:'manager'},'test',config);assert(html.includes('Printer needs a new nozzle &lt;script&gt;'));assert(!html.includes('<script>bad</script>'));
+});
+test('late voicemail transcript updates its dedicated HubSpot property without altering staff content',async()=>{
+  const {syncTranscripts}=await import('../hubspot.js');const db=openDatabase(':memory:');
+  const item=insertEnquiry(db,{channel:'phone',queue:'sales',subject:'Call'});
+  db.prepare("UPDATE enquiries SET hubspot_ticket_id='123',voicemail_transcript='Need a repair',archived_at='2026-10-01' WHERE id=?").run(item.id);
+  let patches=0;let created=false;
+  const mock=async(url,opts)=>{
+    if(opts.method==='PATCH'){patches++;assert.deepEqual(JSON.parse(opts.body),{properties:{formtech_voicemail_transcript:'Need a repair'}});return new Response('{}');}
+    if(opts.method==='POST'){created=true;return new Response('{}');}
+    return new Response('{}',{status:created?200:404});
+  };
+  await syncTranscripts(db,{hubspot:{token:'test'}},mock);await syncTranscripts(db,{hubspot:{token:'test'}},mock);assert(created);assert.equal(patches,1);assert.equal(db.prepare('SELECT transcript_synced FROM enquiries').get().transcript_synced,'Need a repair');db.close();
+});
