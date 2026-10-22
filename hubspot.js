@@ -111,6 +111,24 @@ export async function syncTranscripts(db,config,fetcher=fetch) {
     }
   }catch(error) {
     const message=error.message?.startsWith('HubSpot ')?error.message:'HubSpot transcript sync interrupted; will retry';
-    for(const item of items)db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run(message,item.id);
+    for(const item of items) {
+      try {
+        // Ticket write access can work even when schema creation is not permitted.
+        const path='/crm/v3/objects/tickets/'+encodeURIComponent(item.hubspot_ticket_id);
+        const existing=await request(path+'?properties=content');
+        if(!existing.ok)throw Error('read');
+        const ticket=await existing.json();
+        if(String(ticket.id)!==item.hubspot_ticket_id||typeof ticket.properties?.content!=='string')throw Error('invalid ticket');
+        const content=ticket.properties.content;
+        const marker=`[Formtech voicemail transcript: ${item.transcription_sid||item.recording_sid}]`;
+        if(!content.includes(marker)&&!content.includes(item.voicemail_transcript)) {
+          const updated=await request(path,{method:'PATCH',body:JSON.stringify({properties:{content:content+'\n\n'+marker+'\nAutomatic transcript — verify important details against the recording.\n'+item.voicemail_transcript}})});
+          if(!updated.ok)throw Error('write');
+        }
+        db.prepare("UPDATE enquiries SET transcript_synced=?,transcript_error='' WHERE id=?").run(item.voicemail_transcript,item.id);
+      } catch {
+        db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run(message+'; ticket-description fallback also pending',item.id);
+      }
+    }
   }
 }

@@ -20,3 +20,16 @@ test('recovery rejects mismatched recordings, throttles retries, and skips delet
 test('provider failures are visible and leave existing data intact',async()=>{
  const {db}=setup();await recoverTranscripts(db,config,async()=>new Response('{}',{status:401}));const row=db.prepare('SELECT * FROM enquiries').get();assert(row.transcription_error.includes('401'));assert.equal(row.voicemail_transcript,'');db.close();
 });
+test('HubSpot schema denial falls back to description, preserves staff text and deduplicates uncertain writes',async()=>{
+ const {syncTranscripts}=await import('../hubspot.js');const {db,item}=setup();
+ db.prepare("UPDATE enquiries SET voicemail_transcript='Please repair the nozzle.',transcription_sid=?,hubspot_ticket_id='456' WHERE id=?").run(sid,item.id);
+ let content='Staff note: quote approved.',patches=0;
+ const fetcher=async(url,opts)=>{
+  if(url.includes('/properties/'))return new Response('{}',{status:403});
+  if(opts.method==='PATCH'){patches++;content=JSON.parse(opts.body).properties.content;throw Error('Lost response after commit');}
+  return new Response(JSON.stringify({id:'456',properties:{content}}));
+ };
+ await syncTranscripts(db,{hubspot:{token:'test'}},fetcher);assert(content.startsWith('Staff note: quote approved.'));assert(content.includes('Please repair the nozzle.'));
+ db.prepare('UPDATE enquiries SET transcript_attempt_at=0').run();await syncTranscripts(db,{hubspot:{token:'test'}},fetcher);
+ assert.equal(patches,1);assert.equal(db.prepare('SELECT transcript_synced FROM enquiries').get().transcript_synced,'Please repair the nozzle.');db.close();
+});
