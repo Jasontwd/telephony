@@ -96,16 +96,21 @@ export async function syncTranscripts(db,config,fetcher=fetch) {
     const path='/crm/v3/properties/tickets/formtech_voicemail_transcript';
     let property=await request(path);
     if(property.status===404) {
-      property=await request('/crm/v3/properties/tickets',{method:'POST',body:JSON.stringify({name:'formtech_voicemail_transcript',label:'Formtech voicemail transcript',type:'string',fieldType:'textarea',groupName:'ticketinformation',description:'Automatic voicemail transcript from Formtech. Verify important details against the recording.'})});
+      const definition=await request('/crm/v3/properties/tickets/content');
+      if(!definition.ok)throw Error(`HubSpot property lookup HTTP ${definition.status}`);
+      const group=(await definition.json()).groupName;
+      if(typeof group!=='string'||!group)throw Error('HubSpot ticket property group unavailable');
+      property=await request('/crm/v3/properties/tickets',{method:'POST',body:JSON.stringify({name:'formtech_voicemail_transcript',label:'Formtech voicemail transcript',type:'string',fieldType:'textarea',groupName:group,description:'Automatic voicemail transcript from Formtech. Verify important details against the recording.'})});
       if(property.status===409)property=await request(path);
     }
-    if(!property.ok)throw Error('property');
+    if(!property.ok)throw Error(`HubSpot transcript property HTTP ${property.status}; check ticket schema permissions`);
     for(const item of items) {
       const response=await request('/crm/v3/objects/tickets/'+encodeURIComponent(item.hubspot_ticket_id),{method:'PATCH',body:JSON.stringify({properties:{formtech_voicemail_transcript:item.voicemail_transcript}})});
       if(!response.ok){db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run('HubSpot transcript delivery pending; will retry',item.id);continue;}
       db.prepare("UPDATE enquiries SET transcript_synced=?,transcript_error='' WHERE id=?").run(item.voicemail_transcript,item.id);
     }
-  }catch {
-    for(const item of items)db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run('HubSpot transcript sync needs ticket-property permissions or a retry. Transcript is saved here.',item.id);
+  }catch(error) {
+    const message=error.message?.startsWith('HubSpot ')?error.message:'HubSpot transcript sync interrupted; will retry';
+    for(const item of items)db.prepare('UPDATE enquiries SET transcript_error=? WHERE id=?').run(message,item.id);
   }
 }

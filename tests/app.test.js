@@ -323,7 +323,8 @@ test('late voicemail transcript updates its dedicated HubSpot property without a
   let patches=0;let created=false;
   const mock=async(url,opts)=>{
     if(opts.method==='PATCH'){patches++;assert.deepEqual(JSON.parse(opts.body),{properties:{formtech_voicemail_transcript:'Need a repair'}});return new Response('{}');}
-    if(opts.method==='POST'){created=true;return new Response('{}');}
+    if(opts.method==='POST'){assert.equal(JSON.parse(opts.body).groupName,'ticket_information');created=true;return new Response('{}');}
+    if(url.endsWith('/content'))return new Response(JSON.stringify({groupName:'ticket_information'}));
     return new Response('{}',{status:created?200:404});
   };
   await syncTranscripts(db,{hubspot:{token:'test'}},mock);await syncTranscripts(db,{hubspot:{token:'test'}},mock);assert(created);assert.equal(patches,1);assert.equal(db.prepare('SELECT transcript_synced FROM enquiries').get().transcript_synced,'Need a repair');db.close();
