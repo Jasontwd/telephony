@@ -35,8 +35,10 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
     return say('Please help us prepare for your callback. After the beep, tell us your name, your callback number, and what you need help with. If relevant, include your printer model or order number and describe the problem. Please leave a message so we can direct your enquiry to the right person. Your message will be recorded and transcribed for the Formtech team. Press hash when you have finished.')+
       `<Record maxLength="115" timeout="8" finishOnKey="#" playBeep="true" transcribe="true" transcribeCallback="${url('/voice/transcription')}" action="${url('/voice/thanks')}" method="POST" recordingStatusCallback="${url('/voice/recording')}" recordingStatusCallbackMethod="POST"/>`+say('Thank you. Goodbye.')+'<Hangup/>';
   };
+  const services=()=>`<Gather numDigits="1" timeout="7" actionOnEmptyResult="true" action="${url('/voice/select?services=1&amp;attempt=0')}" method="POST">`+
+    say('Formtech offers a 3D printing bureau in Auckland and Christchurch, from one-off prototypes to batches of finished parts. We make functional components, jigs, fixtures, tooling, detailed models and large display pieces. Our printing processes include S L S nylon, S L A resin, and F D M filament, with engineering and flexible materials to suit your application. We also offer 3D scanning and reverse engineering, printer sales and demonstrations, materials, servicing and repairs. For a printing quote, send your S T L or STEP files, quantity and requirements to orders at formtech dot co dot N Z, or visit our website and select Capabilities. To discuss your project with Auckland, press 2. For Christchurch, press 3. To hear this again, press 1. To return to the main menu, press 0.')+'</Gather>';
   const menu=attempt=>`<Gather numDigits="1" timeout="7" actionOnEmptyResult="true" action="${url('/voice/select?attempt='+attempt)}" method="POST">`+
-    say('Thanks for calling Formtech 3D Printing. For our Auckland 3D showroom and production bureau, press 1. For our Christchurch 3D showroom and production bureau, press 2. For technical support and repairs, press 3. For orders and deliveries, press 4. For accounts and payments, press 5.')+'</Gather>';
+    say('Thanks for calling Formtech 3D Printing. To hear about our services and 3D printing bureau, press 1. For our Auckland 3D showroom and production bureau, press 2. For our Christchurch 3D showroom and production bureau, press 3. For technical support and repairs, press 4. For orders and deliveries, press 5. For accounts and payments, press 6.')+'</Gather>';
   const dial=(item,route,backup=false)=> {
     const dest=backup?route.backup:route.phone;
     if(!isOpen(config,route.store)) {
@@ -124,9 +126,18 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
         if(!item)fail(404,'Call not found');
         if(path==='/voice/incoming')return send(200,xml(menu(0)),'text/xml');
         if(path==='/voice/select') {
-          const route=config.routes[value('Digits',8)];
+          const digit=value('Digits',8);
+          if(digit==='1') {
+            // Information-only callers do not need a callback; retain any earlier enquiry.
+            if(['Incoming phone enquiry','Services information'].includes(item.subject))
+              updateCall(item.id,{subject:'Services information',callback:0,call_status:'information'});
+            return send(200,xml(services()),'text/xml');
+          }
+          if(digit==='0'||(!digit&&requestUrl.searchParams.get('services')==='1'))
+            return send(200,xml(menu(0)),'text/xml');
+          const route=config.routes[digit];
           if(!route) return send(200,xml(requestUrl.searchParams.get('attempt')==='0'?say('Sorry, please choose one of the following options.')+menu(1):voicemail(item)),'text/xml');
-          updateCall(item.id,{queue:route.queue,store:route.store,owner:config.users.some(u=>u.username===route.owner)?route.owner:'',subject:route.label,call_status:'routing'});
+          updateCall(item.id,{queue:route.queue,store:route.store,owner:config.users.some(u=>u.username===route.owner)?route.owner:'',subject:route.label,call_status:'routing',callback:1});
           item=db.prepare('SELECT * FROM enquiries WHERE id=?').get(item.id);
           return send(200,xml(dial(item,route)),'text/xml');
         }

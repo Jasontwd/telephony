@@ -106,11 +106,11 @@ export function loadConfig(env = process.env) {
     if (!hours[name] || Object.entries(hours[name]).some(([day,times]) => !/^[0-6]$/.test(day) || !Array.isArray(times) || times.length!==2 || times.some(t=>!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) || times[0]>=times[1])) throw Error('Invalid HOURS_JSON');
   }
   const routes = {
-    '1': {label:'Auckland sales and demos',queue:'sales',store:'auckland',owner:'martin',env:'AUCKLAND'},
-    '2': {label:'Christchurch sales and demos',queue:'sales',store:'christchurch',owner:'jason',env:'CHRISTCHURCH'},
-    '3': {label:'Technical support and repairs',queue:'support',store:'any',owner:'',env:'SUPPORT'},
-    '4': {label:'Orders and deliveries',queue:'orders',store:'any',owner:'',env:'ORDERS'},
-    '5': {label:'Accounts and payments',queue:'accounts',store:'any',owner:'',env:'ACCOUNTS'}
+    '2': {label:'Auckland sales and demos',queue:'sales',store:'auckland',owner:'martin',env:'AUCKLAND'},
+    '3': {label:'Christchurch sales and demos',queue:'sales',store:'christchurch',owner:'jason',env:'CHRISTCHURCH'},
+    '4': {label:'Technical support and repairs',queue:'support',store:'any',owner:'',env:'SUPPORT'},
+    '5': {label:'Orders and deliveries',queue:'orders',store:'any',owner:'',env:'ORDERS'},
+    '6': {label:'Accounts and payments',queue:'accounts',store:'any',owner:'',env:'ACCOUNTS'}
   };
   for (const route of Object.values(routes)) {
     route.phone = env[`${route.env}_PHONE`] || '';

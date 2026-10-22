@@ -7,7 +7,7 @@ First working version of Formtech's public enquiry form, staff call/enquiry work
 - Public form for sales, support, orders, accounts and general enquiries, with store preference.
 - Separate staff logins; managers can see all queues, agents cannot see accounts, accounts staff see only accounts.
 - Assignments, callback tasks, next actions, due dates, sales outcomes, quote values and an audit trail.
-- Twilio voice webhooks: press 1 Auckland, 2 Christchurch, 3 support, 4 orders, 5 accounts.
+- Twilio voice webhooks: press 1 services and 3D printing bureau information, 2 Auckland, 3 Christchurch, 4 support, 5 orders, 6 accounts.
 - NZ local business hours, configurable closure dates, one backup destination per route, answer confirmation, shared voicemail and call metadata.
 - Durable HubSpot ticket handoff for every active enquiry queue and channel (sales, general, orders, accounts and support). A unique HubSpot reference property prevents duplicate tickets after timeouts.
 - Optional signed email ingestion bridge for orders@ and accounts@. support@ is deliberately excluded.
@@ -242,3 +242,8 @@ Signed POST /voice/transcription saves the automatic text on the phone record; s
 
 
 Transcript recovery now polls existing Twilio recording transcripts in batches of 10, at least five minutes between attempts per recording. This recovers missed callbacks, including older and archived enquiries, without requesting a new paid transcription. Deleted enquiries are excluded. Unavailable transcripts and API errors are shown on the record. HubSpot property creation discovers the portal's actual default ticket-property group instead of using a hard-coded group name. Completed text also appears as a preview in the enquiry list.
+
+
+### Services information (phone option 1)
+
+Option 1 describes bureau printing (SLS nylon, SLA resin and FDM), prototypes and finished parts, jigs/fixtures/tooling, scanning/reverse engineering, printer sales, materials and repairs. Sources: https://www.formtech.co.nz/pages/3d-printing-capability and https://www.formtech.co.nz/pages/3d-print-services. Callers can press 2 for Auckland, 3 for Christchurch, 1 to repeat or 0 for the main menu. Silence after the information returns to the main menu; its normal bounded retry then offers voicemail. Information is available outside business hours; selecting a team still respects its hours. Information-only calls remain logged without a callback flag; choosing a team or leaving voicemail marks a callback needed. Staff still press 1 to accept forwarded calls.

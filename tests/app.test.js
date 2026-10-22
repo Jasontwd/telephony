@@ -22,7 +22,7 @@ function voice(path,fields={}) {const form=new URLSearchParams({AccountSid:accou
 
 test('health check and public page do not expose private destination numbers',async()=>{
   assert.equal((await fetch(base+'/health')).status,200);
-  const html=await(await fetch(base)).text();assert.ok(!html.includes(config.routes['1'].phone));assert.ok(html.includes('How can we help?'));
+  const html=await(await fetch(base)).text();assert.ok(!html.includes(config.routes['2'].phone));assert.ok(html.includes('How can we help?'));
 });
 test('staff data requires authentication; unknown user rejected',async()=>{
   const r=await fetch(base+'/staff',{redirect:'manual'});assert.equal(r.status,303);
@@ -81,7 +81,7 @@ test('incoming retry creates one call record and no-selection falls back to voic
 });
 test('open-hour route dials configured destination with answer confirmation; machine answer falls back',async()=>{
   const all=Object.fromEntries(Array.from({length:7},(_,i)=>[i,['00:00','23:59']]));config.hours.general=all;
-  const xml=await(await voice('/voice/select?attempt=0',{Digits:'3'})).text();assert.ok(xml.includes(config.routes['3'].phone));assert.ok(xml.includes('/voice/confirm?parent='));
+  const xml=await(await voice('/voice/select?attempt=0',{Digits:'4'})).text();assert.ok(xml.includes(config.routes['4'].phone));assert.ok(xml.includes('/voice/confirm?parent='));
   const ended=await(await voice('/voice/dial-ended?backup=0',{DialCallStatus:'completed'})).text();assert.ok(ended.includes('<Record'));
 });
 test('confirmed staff answer is tracked; recording and status callbacks remain idempotent',async()=>{
@@ -132,12 +132,12 @@ test('production fails closed without staff authentication and required telephon
   assert.throws(()=>loadConfig({TELEPHONY_ENABLED:'true'}));
 });
 test('unanswered call tries one backup only, then voicemail; closed route never dials',async()=>{
-  const call='CA'+'5'.repeat(32);config.routes['1'].backup='+6495550103';
+  const call='CA'+'5'.repeat(32);config.routes['2'].backup='+6495550103';
   config.hours.auckland=Object.fromEntries(Array.from({length:7},(_,i)=>[i,['00:00','23:59']]));
-  await voice('/voice/incoming',{CallSid:call});await voice('/voice/select?attempt=0',{CallSid:call,Digits:'1'});
-  const backup=await(await voice('/voice/dial-ended?backup=0',{CallSid:call,DialCallStatus:'busy'})).text();assert.ok(backup.includes(config.routes['1'].backup));
+  await voice('/voice/incoming',{CallSid:call});await voice('/voice/select?attempt=0',{CallSid:call,Digits:'2'});
+  const backup=await(await voice('/voice/dial-ended?backup=0',{CallSid:call,DialCallStatus:'busy'})).text();assert.ok(backup.includes(config.routes['2'].backup));
   const voicemail=await(await voice('/voice/dial-ended?backup=1',{CallSid:call,DialCallStatus:'no-answer'})).text();assert.ok(voicemail.includes('<Record'));assert.ok(!voicemail.includes('<Dial'));
-  config.hours.auckland={};const closed=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:'1'})).text();assert.ok(!closed.includes('<Dial'));
+  config.hours.auckland={};const closed=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:'2'})).text();assert.ok(!closed.includes('<Dial'));
 });
 test('completed provider retries do not reopen a callback finished by staff',async()=>{
   const call='CA'+'5'.repeat(32);
@@ -187,7 +187,7 @@ test('embed tokens reject tampering, expiry and foreign origins; staff remains i
 
 test('closed showroom choices announce the selected location before voicemail, while open routes do not',async()=>{
   const all=Object.fromEntries(Array.from({length:7},(_,i)=>[i,['00:00','23:59']]));
-  for(const [digit,store,location] of [['1','auckland','Auckland'],['2','christchurch','Christchurch']]) {
+  for(const [digit,store,location] of [['2','auckland','Auckland'],['3','christchurch','Christchurch']]) {
     const originalHours=config.hours[store], originalPhone=config.routes[digit].phone;
     try {
       config.hours[store]={};
@@ -328,4 +328,28 @@ test('late voicemail transcript updates its dedicated HubSpot property without a
     return new Response('{}',{status:created?200:404});
   };
   await syncTranscripts(db,{hubspot:{token:'test'}},mock);await syncTranscripts(db,{hubspot:{token:'test'}},mock);assert(created);assert.equal(patches,1);assert.equal(db.prepare('SELECT transcript_synced FROM enquiries').get().transcript_synced,'Need a repair');db.close();
+});
+
+
+test('services option explains bureau capabilities and returns to menu without creating a callback',async()=>{
+  const call='CA'+'a'.repeat(32);
+  const incoming=await(await voice('/voice/incoming',{CallSid:call})).text();
+  assert.match(incoming,/printing bureau, press 1/);
+  assert.match(incoming,/Auckland.*press 2/);
+  assert.match(incoming,/Christchurch.*press 3/);
+  const info=await(await voice('/voice/select?attempt=0',{CallSid:call,Digits:'1'})).text();
+  assert.match(info,/S L S nylon/);assert.match(info,/3D scanning and reverse engineering/);
+  assert.match(info,/orders at formtech/);assert.ok(!info.includes('<Dial'));assert.ok(!info.includes('<Record'));
+  assert.equal(app.db.prepare('SELECT callback FROM enquiries WHERE external_key=?').get('call:'+call).callback,0);
+  for(const Digits of ['0','']) {
+    const back=await(await voice('/voice/select?services=1&attempt=0',{CallSid:call,Digits})).text();
+    assert.match(back,/technical support and repairs, press 4/);assert.match(back,/accounts and payments, press 6/);
+  }
+  await voice('/voice/select?attempt=0',{CallSid:call,Digits:'5'});
+  let item=app.db.prepare('SELECT * FROM enquiries WHERE external_key=?').get('call:'+call);
+  assert.equal(item.queue,'orders');assert.equal(item.callback,1);
+  await voice('/voice/select?attempt=0',{CallSid:call,Digits:'1'});
+  assert.equal(app.db.prepare('SELECT callback FROM enquiries WHERE id=?').get(item.id).callback,1);
+  await voice('/voice/select?attempt=0',{CallSid:call,Digits:'6'});
+  assert.equal(app.db.prepare('SELECT queue FROM enquiries WHERE id=?').get(item.id).queue,'accounts');
 });
