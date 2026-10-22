@@ -1,3 +1,4 @@
+import {archiveEnquiry,syncClosedTickets} from './archive.js';
 import {recoverTranscripts} from './transcription.js';
 import {runFollowups} from './followup.js';
 import {runCallSummary,callReport,summaryStatus,queueTestSummary} from './call-summary.js';
@@ -118,7 +119,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
           const item=db.prepare('SELECT * FROM enquiries WHERE external_key=?').get('call:'+parent);
           if(!item)fail(404,'Call not found');
           if(path==='/voice/confirm')return send(200,xml(`<Gather numDigits="1" timeout="7" action="${esc(url('/voice/accept?parent='+parent))}" method="POST">${say('Formtech '+item.queue+' call. Press 1 to accept.')}</Gather><Hangup/>`),'text/xml');
-          if(value('Digits',8)==='1') {updateCall(item.id,{accepted:1,callback:0,call_status:'answered'});return send(200,xml(''),'text/xml');}
+          if(value('Digits',8)==='1') {updateCall(item.id,{accepted:1,callback:0,call_status:'answered'});archiveEnquiry(db,item.id,'Phone system','Answered and accepted by staff',true);return send(200,xml(''),'text/xml');}
           return send(200,xml('<Hangup/>'),'text/xml');
         }
         let item=db.prepare('SELECT * FROM enquiries WHERE external_key=?').get('call:'+sid);
@@ -239,7 +240,22 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
           const where=user.role==='manager'?'1=1':user.role==='accounts'?"queue='accounts'":"queue<>'accounts'";
           return send(200,views.dashboard(db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND archived_at='' AND ${where} ORDER BY created_at DESC`).all(),user,session.csrf,Object.fromEntries(requestUrl.searchParams)));
         }
-        if(path==='/staff/archived'&&req.method==='GET') {
+        if(path==='/staff/calls'&&req.method==='GET') {
+          const where=user.role==='manager'?'1=1':user.role==='accounts'?"queue='accounts'":"queue<>'accounts'";
+          const period=requestUrl.searchParams.get('days')||'30';
+          if(!['7','30','90','all'].includes(period))fail(400,'Invalid period');
+          const since=period==='all'?'':new Date(Date.now()-Number(period)*86400000).toISOString();
+          const items=db.prepare(`SELECT created_at,store,queue,subject,accepted,recording_sid,callback,archived_at FROM enquiries WHERE channel='phone' AND deleted_at='' AND created_at>=? AND ${where} ORDER BY created_at DESC`).all(since);
+          return send(200,views.calls(items,user,session.csrf,period));
+        }
+        const resolution=path.match(/^\/staff\/enquiries\/(\d+)\/resolve$/);
+        if(resolution&&req.method==='POST') {
+          const item=db.prepare('SELECT * FROM enquiries WHERE id=?').get(Number(resolution[1]));
+          if(!item||item.deleted_at||!canSee(user,item))fail(404,'Enquiry not found');
+          archiveEnquiry(db,item.id,user.username,'Resolved by staff');
+          return redirect('/staff/archived');
+        }
+        if(path==='/staff/archived' &&req.method==='GET') {
           const where=user.role==='manager'?'1=1':user.role==='accounts'?"queue='accounts'":"queue<>'accounts'";
           return send(200,views.archived(db.prepare(`SELECT * FROM enquiries WHERE deleted_at='' AND archived_at<>'' AND ${where} ORDER BY archived_at DESC`).all(),user,session.csrf));
         }
@@ -253,6 +269,10 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
           const item=db.prepare('SELECT * FROM enquiries WHERE id=?').get(Number(removal[1]));
           if(!item)fail(404,'Enquiry not found');
           const deleting=removal[2]==='delete',reason=value('reason',30);
+          if(deleting&&reason==='resolved') {
+            if(item.deleted_at)fail(409,'Restore the enquiry before archiving it');
+            archiveEnquiry(db,item.id,user.username,'Resolved by staff');return redirect('/staff/archived');
+          }
           if(deleting&&!['test','no_info','dead_call'].includes(reason))fail(400,'Choose a deletion reason');
           if(deleting!==!!item.deleted_at) {
             const time=new Date().toISOString();
@@ -287,6 +307,7 @@ export function createApp(config=loadConfig(), db=openDatabase(config.dbPath)) {
                 `Status: ${state}; owner: ${owner||'unassigned'}; due: ${due||'none'}; callback: ${callback}; outcome: ${outcome||'none'}; quote: ${quote||'none'}; next action: ${next||'none'}`+(note?'\n\n'+note:''));
               db.exec('COMMIT');
             } catch(e) {db.exec('ROLLBACK');throw e;}
+            if(state==='resolved')archiveEnquiry(db,item.id,user.username,'Resolved by staff');
             return redirect(path);
           }
         }
@@ -305,7 +326,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])) {
   const config=loadConfig();
   const {server,db}=createApp(config);
   let syncing=false;
-  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await recoverTranscripts(db,config);await syncTicketProgress(db,config);await runFollowups(db,config);await syncEnquiries(db,config);await syncTranscripts(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
+  const timer=setInterval(async()=>{if(syncing)return;syncing=true;try{await recoverTranscripts(db,config);await syncTicketProgress(db,config);await runFollowups(db,config);await syncEnquiries(db,config);await syncClosedTickets(db,config);await syncTranscripts(db,config);}catch(e){console.error('HubSpot handoff failed');}finally{syncing=false;}},30000);
   timer.unref();
   let summaryBusy=false;
   const summaryTick=async()=>{if(summaryBusy)return;summaryBusy=true;try{await runCallSummary(db,config);}catch{console.error('Call summary check failed');}finally{summaryBusy=false;}};

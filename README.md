@@ -247,3 +247,11 @@ Transcript recovery now polls existing Twilio recording transcripts in batches o
 ### Services information (phone option 1)
 
 Option 1 describes bureau printing (SLS nylon, SLA resin and FDM), prototypes and finished parts, jigs/fixtures/tooling, scanning/reverse engineering, printer sales, materials and repairs. Sources: https://www.formtech.co.nz/pages/3d-printing-capability and https://www.formtech.co.nz/pages/3d-print-services. Callers can press 2 for Auckland, 3 for Christchurch, 1 to repeat or 0 for the main menu. Silence after the information returns to the main menu; its normal bounded retry then offers voicemail. Information is available outside business hours; selecting a team still respects its hours. Information-only calls remain logged without a callback flag; choosing a team or leaving voicemail marks a callback needed. Staff still press 1 to accept forwarded calls.
+
+### Answered calls, resolved enquiries and call dashboard
+
+From this release, a signed Twilio staff acceptance (press 1) immediately archives the incoming enquiry, marks it resolved and clears the callback flag. It queues a durable HubSpot closure, including when a ticket has not yet been created. The normal five-minute phone settling period still applies to ticket creation. A worker checks every 30 seconds and retries failures no more than once a minute. It reads the ticket's actual pipeline and chooses a CLOSED stage; it never deletes HubSpot tickets. The detail page shows pending/error/closed state. Existing historical calls are not bulk-closed by this release.
+
+Staff with access to an enquiry can use **Resolved — archive** or save status Resolved to archive it locally. Managers also have **Resolved — archive instead** in the deletion reason list. These manual actions affect only the app, retain call statistics and leave HubSpot resolution to its users. Existing test/no-info/dead-call deletion behaviour is unchanged.
+
+`/staff/calls` shows rolling 7/30/90-day or all-time incoming call totals, staff acceptance, voicemail, pending callbacks, destination breakdowns and New Zealand daily counts. Archived calls count; deleted entries do not. One incoming call is counted once by its final destination, not by forwarding attempts. Staff queue permissions also apply to analytics; agents cannot see accounts statistics.

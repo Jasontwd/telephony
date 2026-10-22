@@ -17,7 +17,8 @@ after(async()=>{await new Promise(r=>app.server.close(r));app.db.close();});
 const token=html=>html.match(/name="csrf" value="([^"]+)"/)[1];
 async function formPage(path='/') {const r=await fetch(base+path);return {cookie:r.headers.get('set-cookie').split(';')[0],csrf:token(await r.text())};}
 const post=(path,fields,cookie='',extra={})=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Cookie:cookie,...extra},body:new URLSearchParams(fields),redirect:'manual'});
-async function signIn(role) {const f=await formPage('/login');const r=await post('/login',{csrf:f.csrf,username:role,password:'correct-test-password'},f.cookie);assert.equal(r.status,303);const cookie=r.headers.get('set-cookie').split(';')[0];return {cookie,csrf:token(await(await fetch(base+'/staff',{headers:{Cookie:cookie}})).text())};}
+const testSessions={};
+async function signIn(role) {const f=await formPage('/login');const r=await post('/login',{csrf:f.csrf,username:role,password:'correct-test-password'},f.cookie);assert.equal(r.status,303);const cookie=r.headers.get('set-cookie').split(';')[0];return testSessions[role]={cookie,csrf:token(await(await fetch(base+'/staff',{headers:{Cookie:cookie}})).text())};}
 function voice(path,fields={}) {const form=new URLSearchParams({AccountSid:account,CallSid:sid,From:'+6421555010',...fields});return fetch(base+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Twilio-Signature':signature(config.token,config.base+path,form)},body:form});}
 
 test('health check and public page do not expose private destination numbers',async()=>{
@@ -298,7 +299,7 @@ test('archived enquiries leave active lists while preserving accounts access res
   const active=await(await fetch(base+'/staff',{headers:{Cookie:manager.cookie}})).text();assert(!active.includes('Archived sales request'));assert(!active.includes('Archived confidential invoice'));
   const archive=await(await fetch(base+'/staff/archived',{headers:{Cookie:agent.cookie}})).text();assert(archive.includes('Archived sales request'));assert(!archive.includes('Archived confidential invoice'));
   assert.equal((await fetch(base+'/staff/enquiries/'+account.id,{headers:{Cookie:agent.cookie}})).status,404);
-  const detail=await(await fetch(base+'/staff/enquiries/'+sale.id,{headers:{Cookie:manager.cookie}})).text();assert(!detail.includes('Save changes'));assert(detail.includes('Continue working on the linked HubSpot ticket'));
+  const detail=await(await fetch(base+'/staff/enquiries/'+sale.id,{headers:{Cookie:manager.cookie}})).text();assert(!detail.includes('Save changes'));assert(detail.includes('retained in history and removed from the open list'));
   assert.equal((await post('/staff/enquiries/'+sale.id,{csrf:manager.csrf},manager.cookie)).status,409);
 });
 
@@ -352,4 +353,30 @@ test('services option explains bureau capabilities and returns to menu without c
   assert.equal(app.db.prepare('SELECT callback FROM enquiries WHERE id=?').get(item.id).callback,1);
   await voice('/voice/select?attempt=0',{CallSid:call,Digits:'6'});
   assert.equal(app.db.prepare('SELECT queue FROM enquiries WHERE id=?').get(item.id).queue,'accounts');
+});
+
+let archiveSessions;
+test('accepted call archives automatically; dashboard includes archived calls and protects accounts',async()=>{
+ const call='CA'+'b'.repeat(32);await voice('/voice/incoming',{CallSid:call});
+ await voice('/voice/accept?parent='+call,{CallSid:child,ParentCallSid:call,Digits:'1'});
+ const item=app.db.prepare('SELECT * FROM enquiries WHERE external_key=?').get('call:'+call);
+ assert.ok(item.archived_at);assert.equal(item.hubspot_close_state,'pending');assert.equal(item.callback,0);
+ assert.equal((await fetch(base+'/staff/calls',{redirect:'manual'})).status,303);
+ const {manager,agent}=testSessions;archiveSessions={manager,agent};
+ insertEnquiry(app.db,{channel:'phone',queue:'accounts',subject:'Accounts dashboard test'});
+ const a=await(await fetch(base+'/staff/calls?days=all',{headers:{Cookie:agent.cookie}})).text();
+ assert.ok(a.includes('Calls at a glance'));assert.ok(!a.includes('<td>Accounts</td>'));
+ const m=await(await fetch(base+'/staff/calls?days=all',{headers:{Cookie:manager.cookie}})).text();assert.ok(m.includes('<td>Accounts</td>'));
+ assert.equal((await fetch(base+'/staff/calls?days=bad',{headers:{Cookie:manager.cookie}})).status,400);
+});
+test('resolved action and resolved deletion choice archive locally with access checks',async()=>{
+ const {agent,manager}=archiveSessions;
+ const i=insertEnquiry(app.db,{channel:'web',queue:'sales',subject:'Resolve this',callback:1});
+ assert.equal((await post('/staff/enquiries/'+i.id+'/resolve',{},agent.cookie)).status,403);
+ assert.equal((await post('/staff/enquiries/'+i.id+'/resolve',{csrf:agent.csrf},agent.cookie)).status,303);
+ let row=app.db.prepare('SELECT * FROM enquiries WHERE id=?').get(i.id);assert.ok(row.archived_at);assert.equal(row.deleted_at,'');assert.equal(row.hubspot_close_state,'');
+ const privateItem=insertEnquiry(app.db,{channel:'web',queue:'accounts',subject:'Private resolution'});
+ assert.equal((await post('/staff/enquiries/'+privateItem.id+'/resolve',{csrf:agent.csrf},agent.cookie)).status,404);
+ assert.equal((await post('/staff/enquiries/'+privateItem.id+'/delete',{csrf:manager.csrf,reason:'resolved'},manager.cookie)).status,303);
+ row=app.db.prepare('SELECT * FROM enquiries WHERE id=?').get(privateItem.id);assert.ok(row.archived_at);assert.equal(row.deleted_at,'');
 });
