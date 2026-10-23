@@ -72,3 +72,23 @@ jobs:
               assert error.code == 401, "Login form failed before credential validation"
           print("Health, contact page, staff protection, and login form origin checks passed.")
           PY
+
+      - name: Archive historical answered and empty calls once
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/call-cleanup.log"' EXIT
+          if timeout 90 flyctl ssh console -a telephony-kidzwq -C "node /app/scripts/archive-existing-calls.js" > "$RUNNER_TEMP/call-cleanup.log" 2>&1; then
+            python - <<'PYVERIFY'
+          import json, os, pathlib
+          lines = pathlib.Path(os.environ['RUNNER_TEMP'], 'call-cleanup.log').read_text().splitlines()
+          receipt = next(json.loads(line.split('ARCHIVE_CLEANUP_RESULT ', 1)[1]) for line in lines if 'ARCHIVE_CLEANUP_RESULT ' in line)
+          assert all(type(receipt.get(k)) is int and receipt[k] >= 0 for k in ('answered', 'empty', 'total'))
+          assert receipt['answered'] + receipt['empty'] == receipt['total']
+          print('Verified app-only archive: answered=%d, no-message=%d, total=%d' % (receipt['answered'], receipt['empty'], receipt['total']))
+          PYVERIFY
+          else
+            echo "::error::Historical archive could not be verified. No private logs published."
+            exit 1
+          fi
